@@ -3,7 +3,7 @@
 # Written by Rodrigo Jorge <http://www.dbarj.com.br/>
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.00
+# Version 1.01
 # ----------------------------------------------------------------------------
 set -e
 
@@ -449,7 +449,7 @@ then
   echo "#### BEGIN - NEW DISKS IPS DISCOVERY ####"
   cat "$tempshell"
   echo "####  END  - NEW DISKS IPS DISCOVERY ####"
-  
+
   echo -n "Script above must be executed in target machine. Type \"YES\" to apply the changes via SSH: "
   read v_input
   if [ "$v_input" == "YES" ]
@@ -464,14 +464,13 @@ then
       [ $ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep 5
       [ $ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep 10
     done
-  
+
     ## Update Attachments
-    echo 'Bouncing the instance..'
     ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no opc@${v_instancePriVnicIP} "bash -s" < "$tempshell"
     ret=$?
-  
+
     ## Restart Machine
-  
+    echo 'Bouncing the instance..'
     set -x
     ${v_oci} compute instance action \
     --instance-id "${v_newInstanceID}" \
@@ -479,7 +478,7 @@ then
     --wait-for-state RUNNING \
     --max-wait-seconds $v_ocicli_timeout > ${v_instanceID}/tempshell.log
     set +x
-  
+
   fi
 fi
 
