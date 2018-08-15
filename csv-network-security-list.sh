@@ -6,20 +6,20 @@
 # Version 1.00
 # ----------------------------------------------------------------------------
 
-# Define paths for oci-cli and jq:
-v_oci="/usr/local/bin/oci"
-v_jq="/usr/local/bin/jq"
+# Define paths for oci-cli and jq or put them on $PATH. Don't use relative PATHs in the variables below.
+v_oci="oci"
+v_jq="jq"
 
 if ! $(which ${v_oci} >&- 2>&-)
 then
-  echo "Could not find oci-cli binary. Please adapt the path in the script."
+  echo "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
   echo "Dowload page: https://github.com/oracle/oci-cli"
   exit 1
 fi
 
 if ! $(which ${v_jq} >&- 2>&-)
 then
-  echo "Could not find jq binary. Please adapt the path in the script."
+  echo "Could not find jq binary. Please adapt the path in the script if not in \$PATH."
   echo "Download page: https://github.com/stedolan/jq/releases"
   exit 1
 fi
