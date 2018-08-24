@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -e
 
@@ -35,17 +35,22 @@ v_oci_args=""
 # Don't change it.
 v_min_ocicli="2.4.30"
 
+echoError ()
+{
+   (>&2 echo "$1")
+}
+
 exitError ()
 {
-   echo "$1"
+   echoError "$1"
    exit 1
 }
 
 if [ $# -ne 2 ]
 then
-  echo "$0: Two arguments are needed.. given: $#"
-  echo "- 1st param = Compute Instance Name or OCID"
-  echo "- 2nd param = Compute Instance Target Shape"
+  echoError "$0: Two arguments are needed.. given: $#"
+  echoError "- 1st param = Compute Instance Name or OCID"
+  echoError "- 2nd param = Compute Instance Target Shape"
   exit 1
 fi
 
@@ -57,15 +62,15 @@ v_new_shape="$2"
 
 if ! $(which ${v_oci} >&- 2>&-)
 then
-  echo "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
-  echo "Dowload page: https://github.com/oracle/oci-cli"
+  echoError "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
+  echoError "Dowload page: https://github.com/oracle/oci-cli"
   exit 1
 fi
 
 if ! $(which ${v_jq} >&- 2>&-)
 then
-  echo "Could not find jq binary. Please adapt the path in the script if not in \$PATH."
-  echo "Download page: https://github.com/stedolan/jq/releases"
+  echoError "Could not find jq binary. Please adapt the path in the script if not in \$PATH."
+  echoError "Download page: https://github.com/stedolan/jq/releases"
   exit 1
 fi
 
@@ -81,7 +86,7 @@ v_ocicli_timeout=3600
 v_test=$(${v_oci} compute instance list ${v_oci_args} 2>&1) && ret=$? || ret=$?
 if [ $ret -ne 0 ]
 then
-  echo "$v_test"
+  echoError "$v_test"
   if $(grep -q 'compartment-id' <(echo "$v_test"))
   then
     exitError "Compartment ID not set. Either set a [DEFAULT] entry in oci_cli_rc or edit the script variable \$v_oci_args including the '--compartment-id' attribute."

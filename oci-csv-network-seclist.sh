@@ -20,24 +20,35 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Jul/2018 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 
 # Define paths for oci-cli and jq or put them on $PATH. Don't use relative PATHs in the variables below.
 v_oci="oci"
 v_jq="jq"
 
+echoError ()
+{
+   (>&2 echo "$1")
+}
+
+exitError ()
+{
+   echoError "$1"
+   exit 1
+}
+
 if ! $(which ${v_oci} >&- 2>&-)
 then
-  echo "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
-  echo "Dowload page: https://github.com/oracle/oci-cli"
+  echoError "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
+  echoError "Dowload page: https://github.com/oracle/oci-cli"
   exit 1
 fi
 
 if ! $(which ${v_jq} >&- 2>&-)
 then
-  echo "Could not find jq binary. Please adapt the path in the script if not in \$PATH."
-  echo "Download page: https://github.com/stedolan/jq/releases"
+  echoError "Could not find jq binary. Please adapt the path in the script if not in \$PATH."
+  echoError "Download page: https://github.com/stedolan/jq/releases"
   exit 1
 fi
 
@@ -46,7 +57,7 @@ v_vcn_string="--vcn-id ${v_vcn_ocid}"
 
 if [ -z "$v_compartment_ocid" ]
 then
-  echo "OCID of compartment not specified. Please export v_compartment_ocid variable with correct value."
+  echoError "OCID of compartment not specified. Please export v_compartment_ocid variable with correct value."
   ${v_oci} iam compartment list --all | ${v_jq} -r '.data[] | [.name,.id] | @csv'
   exit 1
 else
@@ -54,13 +65,13 @@ else
   ret=$?
   if [ $ret -ne 0 ]
   then
-    echo "OCID of compartment not specified correctly. Please export v_compartment_ocid variable with correct value."
+    echoError "OCID of compartment not specified correctly. Please export v_compartment_ocid variable with correct value."
     ${v_oci} iam compartment list --all | ${v_jq} -r '.data[] | [.name,.id] | @csv'
     exit 1
   else
     if [ -z "$v_listvcn" ]
     then
-      echo "There is no VCN in this Compartment."
+      echoError "There is no VCN in this Compartment."
       exit 1
     fi
   fi
@@ -68,16 +79,16 @@ fi
 
 if [ -z "$v_vcn_ocid" ]
 then
-  echo "OCID of VCN not specified. Please export v_vcn_ocid variable with correct value."
-  ${v_oci} network vcn list --all ${v_cmp_string} | ${v_jq} -r '.data[] | [."display-name",.id] | @csv'
+  echoError "OCID of VCN not specified. Please export v_vcn_ocid variable with correct value."
+  echoError $(${v_oci} network vcn list --all ${v_cmp_string} | ${v_jq} -r '.data[] | [."display-name",.id] | @csv')
   exit 1
 else
   v_listvcn=$(${v_oci} network vcn get ${v_vcn_string})
   ret=$?
   if [ $ret -ne 0 ]
   then
-    echo "OCID of VCN not specified correctly. Please export v_vcn_ocid variable with correct value."
-    ${v_oci} network vcn list --all ${v_cmp_string} | ${v_jq} -r '.data[] | [."display-name",.id] | @csv'
+    echoError "OCID of VCN not specified correctly. Please export v_vcn_ocid variable with correct value."
+    echoError $(${v_oci} network vcn list --all ${v_cmp_string} | ${v_jq} -r '.data[] | [."display-name",.id] | @csv')
     exit 1
   fi
 fi
