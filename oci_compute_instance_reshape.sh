@@ -1,7 +1,7 @@
 #!/bin/bash
 #************************************************************************
 #
-#   oci-compute-instance-reshape.sh
+#   oci_compute_instance_reshape.sh - Change Shape of Compute Instance
 #
 #   Copyright 2018  Rodrigo Jorge <http://www.dbarj.com.br/>
 #
@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.02
+# Version 1.03
 #************************************************************************
 set -e
 
@@ -28,9 +28,8 @@ set -e
 v_oci="oci"
 v_jq="jq"
 
-# Define compartment or leave empty to use the one (if any) specified in oci_cli_rc.
-#v_oci_args="--compartment-id ocid1.compartment.oc1..xxxxx"
-v_oci_args=""
+# Add any desired oci argument. Keep default to avoid oci_cli_rc usage (recommended).
+v_oci_args="--cli-rc-file /dev/null"
 
 # Don't change it.
 v_min_ocicli="2.4.30"
@@ -83,16 +82,14 @@ fi
 
 v_ocicli_timeout=3600
 
-v_test=$(${v_oci} compute instance list ${v_oci_args} 2>&1) && ret=$? || ret=$?
+[ -z "${v_oci_args}" ] || v_oci="${v_oci} ${v_oci_args}"
+
+v_test=$(${v_oci} iam compartment list --all 2>&1) && ret=$? || ret=$?
 if [ $ret -ne 0 ]
 then
+  echoError "oci-cli not able to run \"${v_oci} iam compartment list --all\". Please check error:"
   echoError "$v_test"
-  if $(grep -q 'compartment-id' <(echo "$v_test"))
-  then
-    exitError "Compartment ID not set. Either set a [DEFAULT] entry in oci_cli_rc or edit the script variable \$v_oci_args including the '--compartment-id' attribute."
-  else
-    exitError "oci-cli not able to run \"${v_oci} compute instance list ${v_oci_args}\". Please check error."
-  fi
+  exit 1
 fi
 
 if [ "${v_inst_name:0:18}" == "ocid1.instance.oc1" ]
@@ -108,15 +105,36 @@ then
     exitError "Could not get Display Name of compute ${v_instanceID}"
   fi
 else
-  v_instanceID=$(${v_oci} compute instance list ${v_oci_args} --all | ${v_jq} -rc '.data[] | select(."display-name" == "'"${v_inst_name}"'" and ."lifecycle-state" != "TERMINATED") | ."id"') && ret=$? || ret=$?
-  if [ $ret -ne 0 -o -z "$v_instanceID" ]
+  l_comps=$(${v_oci} iam compartment list --all | ${v_jq} -rc '.data[]."id"') && ret=$? || ret=$?
+  if [ $ret -ne 0 -o -z "$l_comps" ]
+  then
+    exitError "Could not list Compartments."
+  fi
+  for v_comp in $l_comps
+  do
+    v_out=$(${v_oci} compute instance list --compartment-id "$v_comp" --all | ${v_jq} -rc '.data[] | select(."display-name" == "'"${v_inst_name}"'" and ."lifecycle-state" != "TERMINATED") | ."id"') && ret=$? || ret=$?
+    [ $ret -eq 0 ] || exitError "Could not search the OCID of compute ${v_inst_name} in compartment ${v_comp}. Use OCID instead."
+    if [ -n "$v_out" ]
+    then
+      [ -z "$v_instanceID" ] || exitError "More than 1 compute named \"${v_inst_name}\" found in this Tenancy. Use OCID instead."
+      [ -n "$v_instanceID" ] || v_instanceID="$v_out"
+    fi
+  done
+  if [ -z "$v_instanceID" ]
   then
     exitError "Could not get OCID of compute ${v_inst_name}"
   elif [ $(echo "$v_instanceID" | wc -l) -ne 1 ]
   then
-    exitError "More than 1 ${v_inst_name} with this name found in this Compartment."
+    exitError "More than 1 compute named \"${v_inst_name}\" found in one Compartment. Use OCID instead."
   fi
 fi
+
+v_compartment_id=$(${v_oci} compute instance get --instance-id "${v_instanceID}" | ${v_jq} -rc '.data."compartment-id"') && ret=$? || ret=$?
+if [ $ret -ne 0 -o -z "$v_compartment_id" ]
+then
+  exitError "Could not get the instance Compartment ID."
+fi
+v_compartment_arg="--compartment-id ${v_compartment_id}"
 
 v_jsoninst=$(${v_oci} compute instance get --instance-id "${v_instanceID}" | ${v_jq} -rc '.data') && ret=$? || ret=$?
 if [ $ret -ne 0 -o -z "$v_jsoninst" ]
@@ -133,7 +151,7 @@ fi
 v_jsonprivnic=$(echo "$v_jsonvnics" | ${v_jq} -rc 'select (."is-primary" == true)')
 v_jsonsecvnic=$(echo "$v_jsonvnics" | ${v_jq} -rc 'select (."is-primary" != true)')
 
-v_jsonpubsip=$(${v_oci} network public-ip list ${v_oci_args} --scope REGION --all | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
+v_jsonpubsip=$(${v_oci} network public-ip list ${v_compartment_arg} --scope REGION --all | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
 if [ $ret -ne 0 ]
 then
   exitError "Could not get Json for Public IPs of ${v_inst_name}"
@@ -143,7 +161,7 @@ v_reservedpubsip=$(echo "$v_jsonpubsip" | ${v_jq} -rc '."ip-address"')
 v_instanceAD=$(echo "$v_jsoninst" | ${v_jq} -rc '."availability-domain"')
 [ -n "$v_instanceAD" ] || exitError "Could not get Instance Availability Domain."
 
-v_shapecheck=$(${v_oci} compute shape list ${v_oci_args} --all --availability-domain "$v_instanceAD" | ${v_jq} -rc '.data[] | select (."shape" == "'$v_new_shape'") | ."shape"')
+v_shapecheck=$(${v_oci} compute shape list ${v_compartment_arg} --all --availability-domain "$v_instanceAD" | ${v_jq} -rc '.data[] | select (."shape" == "'$v_new_shape'") | ."shape"')
 [ "$v_shapecheck" == "$v_new_shape" ] || exitError "Shape \"$v_new_shape\" not found in this AD."
 
 v_instanceShape=$(echo "$v_jsoninst" | ${v_jq} -rc '."shape"')
@@ -155,7 +173,7 @@ v_instancePriVnicIP=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."private-ip"')
 v_instancePriVnicSubnetID=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."subnet-id"')
 [ -n "$v_instancePriVnicSubnetID" ] || exitError "Could not get Instance Primary Subnet ID."
 
-v_instanceBVID=$(${v_oci} compute boot-volume-attachment list ${v_oci_args} --availability-domain "${v_instanceAD}" --instance-id "${v_instanceID}" | ${v_jq} -rc '.data[] | ."boot-volume-id"')
+v_instanceBVID=$(${v_oci} compute boot-volume-attachment list ${v_compartment_arg} --availability-domain "${v_instanceAD}" --instance-id "${v_instanceID}" | ${v_jq} -rc '.data[] | ."boot-volume-id"')
 [ -n "$v_instanceBVID" ] || exitError "Could not get Instance Boot Volume ID."
 
 echo "Machine will be moved from \"$v_instanceShape\" to \"$v_new_shape\"."
@@ -213,7 +231,7 @@ v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."ipxe-script" // empty' | sed "s/'/'\
 
 ## List Vols
 
-f_jsonvols=$(${v_oci} compute volume-attachment list ${v_oci_args} --all --instance-id "${v_instanceID}" | ${v_jq} -r '.data[] | select(."lifecycle-state" == "ATTACHED")')
+f_jsonvols=$(${v_oci} compute volume-attachment list ${v_compartment_arg} --all --instance-id "${v_instanceID}" | ${v_jq} -r '.data[] | select(."lifecycle-state" == "ATTACHED")')
 
 ## Save Files - Just for backup.
 
@@ -260,7 +278,7 @@ EOF
 
 cat >> "$v_runall" <<EOF
 # Create Instance
-${v_oci} compute instance launch ${v_oci_args} \\
+${v_oci} compute instance launch ${v_compartment_arg} \\
 --availability-domain '${v_instanceAD}' \\
 --shape '${v_new_shape}' \\
 --display-name '${v_inst_name}' \\
@@ -450,7 +468,7 @@ do
   echo "sudo iscsiadm -m node -o delete -T ${v_iqn} -p ${v_ipv4}:${v_port}" >> "$tempshell"
 done
 
-f_jsonvols=$(${v_oci} compute volume-attachment list ${v_oci_args} --all --instance-id "${v_newInstanceID}" | ${v_jq} -r '.data[] | select(."lifecycle-state" == "ATTACHED")')
+f_jsonvols=$(${v_oci} compute volume-attachment list ${v_compartment_arg} --all --instance-id "${v_newInstanceID}" | ${v_jq} -r '.data[] | select(."lifecycle-state" == "ATTACHED")')
 f_instvols=$(echo "$f_jsonvols" | ${v_jq} -rc '."id"')
 
 for v_instvols in $f_instvols
