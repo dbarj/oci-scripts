@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.04
+# Version 1.05
 #************************************************************************
 set -e
 
@@ -76,7 +76,6 @@ function funcPrintRange ()
 }
 
 v_valid_opts="ALL,ALL_REGIONS"
-#v_valid_opts="${v_valid_opts},ADs,Comparts,Shapes,AudEvents,VCNs,PrivateIPs,PublicIPs,VirtCircPubPref"
 v_func_list=$(sed -e '1,/^# BEGIN DYNFUNC/d' -e '/^# END DYNFUNC/,$d' -e 's/^# *//' $0)
 v_opt_list=$(echo "${v_func_list}" | cut -d ',' -f 1 | sort | tr "\n" ",")
 v_valid_opts="${v_valid_opts},${v_opt_list}"
@@ -465,7 +464,13 @@ runAndZip ()
   [ "$v_arg1" != "" -a "$v_arg2" != "" ] || return 1
   echo "Processing \"${v_arg2}\"."
   ${v_arg1} "${v_arg3}" > "${v_arg2}" 2> "${v_arg2}.err" && ret=$? || ret=$?
-  [ -s "${v_arg2}.err" ] && echo "FAILED. Check \"${v_arg2}.err\" for more details." && zip -qmT "$v_outfile" "${v_arg2}.err"
+  if [ -s "${v_arg2}.err" ]
+  then
+    echo "FAILED. Check \"${v_arg2}.err\" for more details."
+    zip -qmT "$v_outfile" "${v_arg2}.err"
+  elif [ -f "${v_arg2}.err" ]
+    rm -f "${v_arg2}.err"
+  fi
   zip -qmT "$v_outfile" "${v_arg2}"
   echo "$v_arg2" >> "${v_listfile}"
 }
