@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.05
+# Version 1.06
 #************************************************************************
 set -e
 
@@ -469,6 +469,7 @@ runAndZip ()
     echo "FAILED. Check \"${v_arg2}.err\" for more details."
     zip -qmT "$v_outfile" "${v_arg2}.err"
   elif [ -f "${v_arg2}.err" ]
+  then
     rm -f "${v_arg2}.err"
   fi
   zip -qmT "$v_outfile" "${v_arg2}"
