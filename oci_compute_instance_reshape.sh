@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.03
+# Version 1.04
 #************************************************************************
 set -e
 
@@ -165,6 +165,7 @@ v_shapecheck=$(${v_oci} compute shape list ${v_compartment_arg} --all --availabi
 [ "$v_shapecheck" == "$v_new_shape" ] || exitError "Shape \"$v_new_shape\" not found in this AD."
 
 v_instanceShape=$(echo "$v_jsoninst" | ${v_jq} -rc '."shape"')
+[ -n "$v_instanceShape" ] || exitError "Could not get Instance Shape."
 [ "$v_instanceShape" != "$v_new_shape" ] || exitError "Source and Target shapes are the same."
 
 v_instancePriVnicIP=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."private-ip"')
@@ -181,10 +182,10 @@ echo "Machine will be moved from \"$v_instanceShape\" to \"$v_new_shape\"."
 v_extra_vnic_params=""
 # --defined-tags
 v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."defined-tags"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_vnic_params="${v_extra_vnic_params}--defined-tags '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_vnic_params="${v_extra_vnic_params}--defined-tags '$v_out' \\"$'\n'
 # --freeform-tags
 v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."freeform-tags"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_vnic_params="${v_extra_vnic_params}--freeform-tags '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_vnic_params="${v_extra_vnic_params}--freeform-tags '$v_out' \\"$'\n'
 
 v_extra_inst_params=""
 # --vnic-display-name
@@ -302,7 +303,9 @@ EOF
 
 ## Update Primary VNIC
 
-cat >> "$v_runall" <<EOF
+if [ -n "${v_extra_vnic_params}" ]
+then
+  cat >> "$v_runall" <<EOF
 # Primary VNIC update
 ${v_oci} network vnic update \\
 --force \\
@@ -310,6 +313,7 @@ ${v_oci} network vnic update \\
 ${v_extra_vnic_params}>> runall.log
 ret=\$?
 EOF
+fi
 
 ## Assign reserved Pub IP to Primary VNIC
 
@@ -421,7 +425,7 @@ echo "Following steps will be executed:"
 echo "- Instance \"${v_inst_name}\"(${v_instanceID}) will be stopped."
 echo "- Instance \"${v_inst_name}\"(${v_instanceID}) will be terminated."
 echo "- New instance \"${v_inst_name}\" will be created with same boot volume and attributes (new OCID generated)."
-echo "- Primary VNIC on new instance \"${v_inst_name}\" will be updated."
+[ -z "$v_extra_vnic_params" ] || echo "- Primary VNIC on new instance \"${v_inst_name}\" will be updated."
 [ -z "$v_jsonsecvnic" ] || echo "- Secondary VNICs will be reattach."
 [ -z "$f_jsonvols" ]    || echo "- Block Volumes will be reattach."
 echo "Execution script created at \"$v_runall\" file."
