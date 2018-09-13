@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.06
+# Version 1.07
 #************************************************************************
 set -e
 
@@ -362,7 +362,6 @@ function jsonGenericMasterAdd ()
 # DON'T REMOVE/CHANGE THOSE COMMENTS. THEY ARE USED TO GENERATE DYNAMIC FUNCTIONS
 
 # BEGIN DYNFUNC
-# Audit-Events,oci_audit_event.json,jsonAudEvents,"$1"
 # BV-BVBackups,oci_bv_boot-volume-backup.json,jsonAllCompart,"bv boot-volume-backup list --all"
 # BV-BVolumes,oci_bv_boot-volume.json,jsonAllAD,"bv boot-volume list --all"
 # BV-Backups,oci_bv_backup.json,jsonAllCompart,"bv backup list --all"
@@ -426,6 +425,7 @@ function jsonGenericMasterAdd ()
 # OS-Objects,oci_os_object.json,jsonGenericMasterAdd,"os object list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
 # OS-PreauthReqs,oci_os_preauth-request.json,jsonGenericMasterAdd,"os preauth-request list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
 # Search-ResTypes,oci_search_resource-type.json,jsonSimple,"search resource-type list --all"
+# Audit-Events,oci_audit_event.json,jsonAudEvents,"$1"
 # END DYNFUNC
 
 # Using File Descriptor 3 to not interfere on "eval"
@@ -466,7 +466,7 @@ runAndZip ()
   ${v_arg1} "${v_arg3}" > "${v_arg2}" 2> "${v_arg2}.err" && ret=$? || ret=$?
   if [ -s "${v_arg2}.err" ]
   then
-    echo "FAILED. Check \"${v_arg2}.err\" for more details."
+    echo "Skipped. Check \"${v_arg2}.err\" for more details."
     zip -qmT "$v_outfile" "${v_arg2}.err"
   elif [ -f "${v_arg2}.err" ]
   then
