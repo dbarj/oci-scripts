@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.08
+# Version 1.09
 #************************************************************************
 set -e
 
@@ -226,7 +226,7 @@ function jsonImages ()
   ## Get also Images used By Instaces.
   l_instImages=$(Comp-Instances | ${v_jq} -r '.data[]."image-id"' | sort -u)
   l_images=$(echo "${v_fout}" | ${v_jq} -r '.data[]."id"')
-  l_diff=$(grep -F -x -v -f <(echo "$l_images") <(echo "$l_instImages"))
+  l_diff=$(grep -F -x -v -f <(echo "$l_images") <(echo "$l_instImages")) || l_diff=""
   for v_image in $l_diff
   do
     v_out=$(jsonSimple "compute image get --image-id ${v_image}")
@@ -235,7 +235,7 @@ function jsonImages ()
   ## Get also Base Images of Images.
   l_baseImages=$(echo "${v_fout}" | ${v_jq} -r '.data[] | select(."base-image-id" != null) | ."base-image-id"' | sort -u)
   l_images=$(echo "${v_fout}" | ${v_jq} -r '.data[]."id"')
-  l_diff=$(grep -F -x -v -f <(echo "$l_images") <(echo "$l_baseImages"))
+  l_diff=$(grep -F -x -v -f <(echo "$l_images") <(echo "$l_baseImages")) || l_diff=""
   for v_image in $l_diff
   do
     v_out=$(jsonSimple "compute image get --image-id ${v_image}")
