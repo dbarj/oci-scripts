@@ -1,7 +1,8 @@
 #!/bin/bash
 #************************************************************************
 #
-#   oci_json_export.sh - Export all OCI information into JSON format
+#   oci_json_export.sh - Export all Oracle Cloud Infrastructure
+#   metadata information into JSON files.
 #
 #   Copyright 2018  Rodrigo Jorge <http://www.dbarj.com.br/>
 #
@@ -20,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.09
+# Version 1.10
 #************************************************************************
 set -e
 
@@ -246,6 +247,21 @@ function jsonImages ()
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
 
+function jsonVNICs ()
+{
+  set -e # Exit if error in any call.
+  local l_vnics v_vnic v_out v_fout
+  ## Get also Images used By Instaces.
+  l_vnics=$(Net-PrivateIPs | ${v_jq} -r '.data[]."vnic-id"' | sort -u)
+  for v_vnic in $l_vnics
+  do
+    v_out=$(jsonSimple "network vnic get --vnic-id ${v_vnic}")
+    [ -n "$v_fout" ] || v_fout='{"data":[]}'
+    [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += [$i.data])' <(echo "$v_fout") <(echo "$v_out"))
+  done
+  [ -z "$v_fout" ] || echo "${v_fout}"
+}
+
 ################################################
 ############## GENERIC FUNCTIONS ###############
 ################################################
@@ -388,7 +404,7 @@ function jsonGenericMasterAdd ()
   set -e # Exit if error in any call.
   [ "$#" -eq 6 ] || echoError "${FUNCNAME[0]} needs 6 parameters"
   [ "$#" -eq 6 ] || return 1
-  local v_arg1 v_arg2 v_arg3 v_arg4 v_arg5 v_arg6 v_out v_fout l_itens v_item
+  local v_arg1 v_arg2 v_arg3 v_arg4 v_arg5 v_arg6 v_out v_fout l_itens v_item v_chk
   v_arg1="$1" # Main oci call
   v_arg2="$2" # Subfunction 1 - FuncName
   v_arg3="$3" # Subfunction 1 - Tag
@@ -400,8 +416,9 @@ function jsonGenericMasterAdd ()
   for v_item in $l_itens
   do
     v_out=$(${v_arg5} "${v_arg1} --${v_arg4} $v_item")
-    [ -z "$v_out" ] || v_out=$(echo "$v_out" | ${v_jq} '.data[] += {"'${v_arg6}'":"'"$v_item"'"}')
-    [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_fout") <(echo "$v_out"))
+    v_chk=$(echo "$v_out" | ${v_jq} '.data // empty')
+    [ -z "$v_chk" ] || v_out=$(echo "$v_out" | ${v_jq} '.data[] += {"'${v_arg6}'":"'"$v_item"'"}')
+    [ -z "$v_chk" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_fout") <(echo "$v_out"))
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
@@ -485,6 +502,7 @@ function jsonGenericMasterAdd ()
 # Net-VCNs,oci_network_vcn.json,jsonAllCompart,"network vcn list --all"
 # Net-VirtCirc,oci_network_virtual-circuit.json,jsonAllCompart,"network virtual-circuit list --all"
 # Net-VirtCircPubPref,oci_network_virtual-circuit-public-prefix.json,jsonGenericMaster,"network virtual-circuit-public-prefix list" "Net-VirtCirc" "id" "virtual-circuit-id" "jsonSimple"
+# Net-Vnics,oci_network_vnic.json,jsonVNICs
 # OS-Buckets,oci_os_bucket.json,jsonAllCompart,"os bucket list --all"
 # OS-Multipart,oci_os_multipart.json,jsonGenericMasterAdd,"os multipart list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
 # OS-Nameserver,oci_os_ns.json,jsonSimple,"os ns get"
@@ -564,16 +582,19 @@ function runAndZip ()
       zip -qmT "$v_outfile" "${v_arg2}.msg"
     fi
   else
-    if [ -s "${v_arg2}.err" ]
+    if [ -f "${v_arg2}.err" ]
     then
       echo "Skipped. Check \"${v_arg2}.err\" for more details."
       zip -qmT "$v_outfile" "${v_arg2}.err"
-    else
-      echo "Skipped."
     fi
   fi
   [ ! -f "${v_arg2}.err" ] || rm -f "${v_arg2}.err"
-  zip -qmT "$v_outfile" "${v_arg2}"
+  if [ -s "${v_arg2}" ]
+  then
+    zip -qmT "$v_outfile" "${v_arg2}"
+  else
+    rm -f "${v_arg2}"
+  fi
   echo "$v_arg2" >> "${v_listfile}"
 }
 
