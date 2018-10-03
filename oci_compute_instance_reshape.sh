@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.04
+# Version 1.05
 #************************************************************************
 set -e
 
@@ -95,22 +95,13 @@ fi
 if [ "${v_inst_name:0:18}" == "ocid1.instance.oc1" ]
 then
   v_instanceID=$(${v_oci} compute instance get --instance-id "${v_inst_name}" | ${v_jq} -rc '.data | select(."lifecycle-state" != "TERMINATED") | ."id"') && ret=$? || ret=$?
-  if [ $ret -ne 0 -o -z "$v_instanceID" ]
-  then
-    exitError "Could not find a compute with the provided OCID."
-  fi
+  [ $ret -eq 0 -a -n "$v_instanceID" ] || exitError "Could not find a compute with the provided OCID."
   v_inst_name=$(${v_oci} compute instance get --instance-id "${v_instanceID}" | ${v_jq} -rc '.data."display-name"') && ret=$? || ret=$?
-  if [ $ret -ne 0 -o -z "$v_inst_name" ]
-  then
-    exitError "Could not get Display Name of compute ${v_instanceID}"
-  fi
+  [ $ret -eq 0 -a -n "$v_inst_name" ] || exitError "Could not get Display Name of compute ${v_instanceID}"
 else
-  l_comps=$(${v_oci} iam compartment list --all | ${v_jq} -rc '.data[]."id"') && ret=$? || ret=$?
-  if [ $ret -ne 0 -o -z "$l_comps" ]
-  then
-    exitError "Could not list Compartments."
-  fi
-  for v_comp in $l_comps
+  v_list_comps=$(${v_oci} iam compartment list --all | ${v_jq} -rc '.data[]."id"') && ret=$? || ret=$?
+  [ $ret -eq 0 -a -n "$v_list_comps" ] || exitError "Could not list Compartments."
+  for v_comp in $v_list_comps
   do
     v_out=$(${v_oci} compute instance list --compartment-id "$v_comp" --all | ${v_jq} -rc '.data[] | select(."display-name" == "'"${v_inst_name}"'" and ."lifecycle-state" != "TERMINATED") | ."id"') && ret=$? || ret=$?
     [ $ret -eq 0 ] || exitError "Could not search the OCID of compute ${v_inst_name} in compartment ${v_comp}. Use OCID instead."
@@ -129,33 +120,22 @@ else
   fi
 fi
 
-v_compartment_id=$(${v_oci} compute instance get --instance-id "${v_instanceID}" | ${v_jq} -rc '.data."compartment-id"') && ret=$? || ret=$?
-if [ $ret -ne 0 -o -z "$v_compartment_id" ]
-then
-  exitError "Could not get the instance Compartment ID."
-fi
+v_jsoninst=$(${v_oci} compute instance get --instance-id "${v_instanceID}" | ${v_jq} -rc '.data') && ret=$? || ret=$?
+[ $ret -eq 0 -a -n "$v_jsoninst" ] || exitError "Could not get Json for compute ${v_inst_name}"
+
+v_compartment_id=$(echo "${v_jsoninst}" | ${v_jq} -rc '."compartment-id"') && ret=$? || ret=$?
+[ $ret -eq 0 -a -n "$v_compartment_id" ] || exitError "Could not get the instance Compartment ID."
 v_compartment_arg="--compartment-id ${v_compartment_id}"
 
-v_jsoninst=$(${v_oci} compute instance get --instance-id "${v_instanceID}" | ${v_jq} -rc '.data') && ret=$? || ret=$?
-if [ $ret -ne 0 -o -z "$v_jsoninst" ]
-then
-  exitError "Could not get Json for compute ${v_inst_name}"
-fi
-
 v_jsonvnics=$(${v_oci} compute instance list-vnics --all --instance-id "${v_instanceID}" | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
-if [ $ret -ne 0 -o -z "$v_jsonvnics" ]
-then
-  exitError "Could not get Json for vnics of ${v_inst_name}"
-fi
+[ $ret -eq 0 -a -n "$v_jsonvnics" ] || exitError "Could not get Json for vnics of ${v_inst_name}"
 
 v_jsonprivnic=$(echo "$v_jsonvnics" | ${v_jq} -rc 'select (."is-primary" == true)')
 v_jsonsecvnic=$(echo "$v_jsonvnics" | ${v_jq} -rc 'select (."is-primary" != true)')
 
 v_jsonpubsip=$(${v_oci} network public-ip list ${v_compartment_arg} --scope REGION --all | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
-if [ $ret -ne 0 ]
-then
-  exitError "Could not get Json for Public IPs of ${v_inst_name}"
-fi
+[ $ret -eq 0 ] || exitError "Could not get Json for Public IPs of ${v_inst_name}"
+
 v_reservedpubsip=$(echo "$v_jsonpubsip" | ${v_jq} -rc '."ip-address"')
 
 v_instanceAD=$(echo "$v_jsoninst" | ${v_jq} -rc '."availability-domain"')
@@ -213,16 +193,16 @@ fi
 v_instancePriVnicPubIP="$v_out"
 # --defined-tags
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."defined-tags"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--defined-tags '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params="${v_extra_inst_params}--defined-tags '$v_out' \\"$'\n'
 # --freeform-tags
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."freeform-tags"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--freeform-tags '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params="${v_extra_inst_params}--freeform-tags '$v_out' \\"$'\n'
 # --metadata
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."metadata"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--metadata '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params="${v_extra_inst_params}--metadata '$v_out' \\"$'\n'
 # --extended-metadata
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."extended-metadata"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--extended-metadata '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params="${v_extra_inst_params}--extended-metadata '$v_out' \\"$'\n'
 # --fault-domain
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."fault-domain"' | sed "s/'/'\\\''/g")
 [ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--fault-domain '$v_out' \\"$'\n'
@@ -359,12 +339,12 @@ do
   then
     if grep -q -F -x "$v_6" <(echo "$v_reservedpubsip")
     then
-      v_extra_inst_params="${v_extra_inst_params}--assign-public-ip false \\"$'\n'
+      v_extra_vnic_params="${v_extra_vnic_params}--assign-public-ip false \\"$'\n'
     else
-      v_extra_inst_params="${v_extra_inst_params}--assign-public-ip true \\"$'\n'
+      v_extra_vnic_params="${v_extra_vnic_params}--assign-public-ip true \\"$'\n'
     fi
   else
-    v_extra_inst_params="${v_extra_inst_params}--assign-public-ip false \\"$'\n'
+    v_extra_vnic_params="${v_extra_vnic_params}--assign-public-ip false \\"$'\n'
   fi
   [ -z "$v_7" ] || v_extra_vnic_params="${v_extra_vnic_params}--skip-source-dest-check '$v_7' \\"$'\n'
   [ -z "$v_8" ] || v_extra_vnic_params="${v_extra_vnic_params}--defined-tags '$v_8' \\"$'\n'
