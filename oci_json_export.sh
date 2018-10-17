@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.10
+# Version 1.11
 #************************************************************************
 set -e
 
@@ -33,7 +33,7 @@ v_jq="jq"
 v_oci_args="--cli-rc-file /dev/null"
 
 # Don't change it.
-v_min_ocicli="2.4.30"
+v_min_ocicli="2.4.34"
 
 # Temporary Folder. Used to stage some repetitive jsons and save time. Empty to disable.
 v_tmpfldr="/tmp/oci"
@@ -204,7 +204,7 @@ function jsonBkpPolAssign ()
   local v_out v_fout
   v_fout=$(jsonGenericMaster "bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment" "BV-Volumes" "id" "asset-id" "jsonSimple")
   v_out=$(jsonGenericMaster "bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment" "BV-BVolumes" "id" "asset-id" "jsonSimple")
-  [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_fout") <(echo "$v_out"))
+  v_fout=$(jsonConcat "$v_fout" "$v_out")
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
 
@@ -214,7 +214,7 @@ function jsonPublicIPs ()
   local v_out v_fout
   v_fout=$(jsonAllCompart "network public-ip list --scope REGION --all")
   v_out=$(jsonAllAD "network public-ip list --scope AVAILABILITY_DOMAIN --all")
-  [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_fout") <(echo "$v_out"))
+  v_fout=$(jsonConcat "$v_fout" "$v_out")
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
 
@@ -231,7 +231,7 @@ function jsonImages ()
   for v_image in $l_diff
   do
     v_out=$(jsonSimple "compute image get --image-id ${v_image}")
-    [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += [$i.data])' <(echo "$v_fout") <(echo "$v_out"))
+    v_fout=$(jsonConcat "$v_fout" "$v_out")
   done
   ## Get also Base Images of Images.
   l_baseImages=$(echo "${v_fout}" | ${v_jq} -r '.data[] | select(."base-image-id" != null) | ."base-image-id"' | sort -u)
@@ -240,7 +240,7 @@ function jsonImages ()
   for v_image in $l_diff
   do
     v_out=$(jsonSimple "compute image get --image-id ${v_image}")
-    [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += [$i.data])' <(echo "$v_fout") <(echo "$v_out"))
+    v_fout=$(jsonConcat "$v_fout" "$v_out")
   done
   ## Remove Duplicates
   [ -z "$v_fout" ] || v_fout=$(echo "${v_fout}" | ${v_jq} '.data | unique | {data : .}')
@@ -252,12 +252,12 @@ function jsonVNICs ()
   set -e # Exit if error in any call.
   local l_vnics v_vnic v_out v_fout
   ## Get also Images used By Instaces.
+  v_fout=""
   l_vnics=$(Net-PrivateIPs | ${v_jq} -r '.data[]."vnic-id"' | sort -u)
   for v_vnic in $l_vnics
   do
     v_out=$(jsonSimple "network vnic get --vnic-id ${v_vnic}")
-    [ -n "$v_fout" ] || v_fout='{"data":[]}'
-    [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += [$i.data])' <(echo "$v_fout") <(echo "$v_out"))
+    v_fout=$(jsonConcat "$v_fout" "$v_out")
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
@@ -266,11 +266,12 @@ function jsonVNICs ()
 ############## GENERIC FUNCTIONS ###############
 ################################################
 
-## jsonSimple        -> Simply run the parameter with oci-cli.
-## jsonAllCompart    -> Run parameter for all container-ids.
-## jsonAllCompartAdd -> Same as before, but also add container-id tag in json output.
-## jsonAllAD         -> Run parameter for all availability-domains and container-ids.
-## jsonAllVCN        -> Run parameter for all vcn-ids and container-ids.
+## jsonSimple           -> Simply run the parameter with oci-cli.
+## jsonAllCompart       -> Run parameter for all container-ids.
+## jsonAllCompartAddTag -> Same as before, but also add container-id tag in json output.
+## jsonAllAD            -> Run parameter for all availability-domains and container-ids.
+## jsonAllVCN           -> Run parameter for all vcn-ids and container-ids.
+## jsonConcat           -> Concatenate 2 Jsons data vectors parameters into 1.
 
 function jsonSimple ()
 {
@@ -305,7 +306,7 @@ function jsonSimple ()
       v_out=$(${v_oci} ${v_arg1} --page "${v_next_page}")
       v_next_page=$(echo "${v_out}" | ${v_jq} -rc '."opc-next-page"')
       [ -z "$v_out" -o "${v_next_page}" == "null" ] || v_out=$(echo "$v_out" | ${v_jq} '.data | {data : .}') # Remove Next-Page Tag if it has one.
-      [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_fout") <(echo "$v_out"))
+      v_fout=$(jsonConcat "$v_fout" "$v_out")
     done
     echo "${v_fout}"
   fi
@@ -359,11 +360,11 @@ function jsonGenericMaster ()
   v_arg4="$4" # Subfunction 1 - Param
   v_arg5="$5" # Subfunction 2 - FuncName
   v_fout=""
-  l_itens=$(${v_arg2} | ${v_jq} -r '.data[]."'${v_arg3}'"')
+  l_itens=$(${v_arg2} | ${v_jq} -r '.data[]."'${v_arg3}'"' | sort -u)
   for v_item in $l_itens
   do
     v_out=$(${v_arg5} "${v_arg1} --${v_arg4} $v_item")
-    [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_fout") <(echo "$v_out"))
+    v_fout=$(jsonConcat "$v_fout" "$v_out")
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
@@ -392,7 +393,7 @@ function jsonGenericMaster2 ()
     else
       v_item2="$v_item"
       v_out=$(${v_arg7} "${v_arg1} --${v_arg4} $v_item1 --${v_arg6} $v_item2")
-      [ -z "$v_out" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_fout") <(echo "$v_out"))
+      v_fout=$(jsonConcat "$v_fout" "$v_out")
       v_item1=""
     fi
   done
@@ -412,15 +413,53 @@ function jsonGenericMasterAdd ()
   v_arg5="$5" # Subfunction 2 - FuncName
   v_arg6="$6" # New Tag Name
   v_fout=""
-  l_itens=$(${v_arg2} | ${v_jq} -r '.data[]."'${v_arg3}'"')
+  l_itens=$(${v_arg2} | ${v_jq} -r '.data[]."'${v_arg3}'"' | sort -u)
   for v_item in $l_itens
   do
     v_out=$(${v_arg5} "${v_arg1} --${v_arg4} $v_item")
     v_chk=$(echo "$v_out" | ${v_jq} '.data // empty')
     [ -z "$v_chk" ] || v_out=$(echo "$v_out" | ${v_jq} '.data[] += {"'${v_arg6}'":"'"$v_item"'"}')
-    [ -z "$v_chk" ] || v_fout=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_fout") <(echo "$v_out"))
+    [ -z "$v_chk" ] || v_fout=$(jsonConcat "$v_fout" "$v_out")
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
+}
+
+function jsonConcat ()
+{
+  set -e # Exit if error in any call.
+  [ "$#" -eq 2 ] || echoError "${FUNCNAME[0]} needs 2 parameters"
+  [ "$#" -eq 2 ] || return 1
+  local v_arg1 v_arg2 v_chk_array v_return
+  v_arg1="$1" # Json 1
+  v_arg2="$2" # Json 2
+  v_return=""
+  ## Check if has ".data"
+  if [ -n "${v_arg1}" ]
+  then
+    v_chk_array=$(echo "${v_arg1}" | ${v_jq} '.data // empty')
+    [ -z "${v_chk_array}" ] && v_arg1=""
+  fi
+  if [ -n "${v_arg2}" ]
+  then
+    v_chk_array=$(echo "${v_arg2}" | ${v_jq} '.data // empty')
+    [ -z "${v_chk_array}" ] && v_arg2=""
+  fi
+  ## Concatenate if both not null.
+  if [ -z "${v_arg1}" -a -n "${v_arg2}" ]
+  then
+    v_return="${v_arg2}"
+  elif [ -n "${v_arg1}" -a -z "${v_arg2}" ]
+  then
+    v_return="${v_arg1}"
+  elif [ -n "${v_arg1}" -a -n "${v_arg2}" ]
+  then
+    v_chk_array=$(echo "$v_arg1" | ${v_jq} -r '.data | if type=="array" then "yes" else "no" end')
+    [ "${v_chk_array}" == "no" ] && v_arg1=$(echo "$v_arg1" | ${v_jq} '.data | {"data":[.]}')
+    v_chk_array=$(echo "$v_arg2" | ${v_jq} -r '.data | if type=="array" then "yes" else "no" end')
+    [ "${v_chk_array}" == "no" ] && v_arg2=$(echo "$v_arg2" | ${v_jq} '.data | {"data":[.]}')
+    v_return=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_arg1") <(echo "$v_arg2"))
+  fi
+  echo "${v_return}"
 }
 
 ################################################
@@ -448,6 +487,10 @@ function jsonGenericMasterAdd ()
 # Comp-ConsConns,oci_compute_instance-console-connection.json,jsonAllCompart,"compute instance-console-connection list --all"
 # Comp-Images,oci_compute_image.json,jsonImages
 # Comp-Instances,oci_compute_instance.json,jsonAllCompart,"compute instance list --all"
+# Comp-PicAgrees,oci_compute_pic_agreements.json,jsonGenericMaster2,"compute pic agreements get" "Comp-PicVersions" "listing-id" "listing-id" "listing-resource-version" "resource-version" "jsonSimple"
+# Comp-PicListing,oci_compute_pic_listing.json,jsonSimple,"compute pic listing list --all"
+# Comp-PicSubs,oci_compute_pic_subscription.json,jsonAllCompart,"compute pic subscription list --all"
+# Comp-PicVersions,oci_compute_pic_version.json,jsonGenericMaster,"compute pic version list --all" "Comp-PicListing" "listing-id" "listing-id" "jsonSimple"
 # Comp-Shapes,oci_compute_shape.json,jsonShapes
 # Comp-VnicAttachs,oci_compute_vnic-attachment.json,jsonAllCompart,"compute vnic-attachment list --all"
 # Comp-VolAttachs,oci_compute_volume-attachment.json,jsonAllCompart,"compute volume-attachment list --all"
@@ -466,6 +509,14 @@ function jsonGenericMasterAdd ()
 # DB-System,oci_db_system.json,jsonAllCompart,"db system list --all"
 # DB-SystemShape,oci_db_system-shape.json,jsonGenericMasterAdd,"db system-shape list --all" "IAM-ADs" "name" "availability-domain" "jsonAllCompartAddTag" "availability-domain"
 # DB-Version,oci_db_version.json,jsonAllCompartAddTag,"db version list --all"
+# DNS-Zones,oci_dns_zone.json,jsonAllCompart,"dns zone list --all"
+# Email-Senders,oci_email_sender.json,jsonAllCompart,"email sender list --all"
+# Email-Supps,oci_email_suppression.json,jsonGenericMaster,"email suppression list --all" "IAM-Comparts" "compartment-id" "compartment-id" "jsonSimple"
+# FS-ExpSets,oci_fs_export-set.json,jsonAllAD,"fs export-set list --all"
+# FS-Exports,oci_fs_export.json,jsonAllCompartAddTag,"fs export list --all"
+# FS-FileSystems,oci_fs_file-system.json,jsonAllAD,"fs file-system list --all"
+# FS-MountTargets,oci_fs_mount-target.json,jsonAllAD,"fs mount-target list --all"
+# FS-Snapshots,oci_fs_snapshot.json,jsonGenericMaster,"fs snapshot list --all" "FS-FileSystems" "id" "file-system-id" "jsonSimple"
 # IAM-ADs,oci_iam_availability-domain.json,jsonSimple,"iam availability-domain list"
 # IAM-AuthTokens,oci_iam_auth-token.json,jsonGenericMaster,"iam auth-token list" "IAM-Users" "id" "user-id" "jsonSimple"
 # IAM-Comparts,oci_iam_compartment.json,jsonSimple,"iam compartment list --all"
@@ -479,6 +530,9 @@ function jsonGenericMasterAdd ()
 # IAM-Tag,oci_iam_tag.json,jsonGenericMaster,"iam tag list --all" "IAM-TagNS" "id" "tag-namespace-id" "jsonSimple"
 # IAM-TagNS,oci_iam_tag-namespace.json,jsonAllCompart,"iam tag-namespace list --all"
 # IAM-Users,oci_iam_user.json,jsonSimple,"iam user list --all"
+# Kms-KeyVersions,oci_kms_management_key-version.json,jsonGenericMaster,"kms management key-version list --all" "Kms-Keys" "id" "key-id" "jsonSimple"
+# Kms-Keys,oci_kms_management_key.json,jsonAllCompart,"kms management key list --all"
+# Kms-Vaults,oci_kms_management_vault.json,jsonAllCompart,"kms management vault list --all"
 # Net-Cpe,oci_network_cpe.json,jsonAllCompart,"network cpe list --all"
 # Net-CrossConn,oci_network_cross-connect.json,jsonAllCompart,"network cross-connect list --all"
 # Net-CrossConnGrp,oci_network_cross-connect-group.json,jsonAllCompart,"network cross-connect-group list --all"
@@ -491,6 +545,7 @@ function jsonGenericMasterAdd ()
 # Net-InternetGateway,oci_network_internet-gateway.json,jsonAllVCN,"network internet-gateway list --all"
 # Net-IpSecConns,oci_network_ip-sec-connection.json,jsonAllCompart,"network ip-sec-connection list --all"
 # Net-LocalPeering,oci_network_local-peering-gateway.json,jsonAllVCN,"network local-peering-gateway list --all"
+# Net-NatGateway,oci_network_nat-gateway.json,jsonAllCompart,"network nat-gateway list --all"
 # Net-NetServiceGW,oci_network_service-gateway.json,jsonAllCompart,"network service-gateway list --all"
 # Net-NetServices,oci_network_service.json,jsonSimple,"network service list --all"
 # Net-PrivateIPs,oci_network_private-ip.json,jsonGenericMaster,"network private-ip list --all" "Net-Subnets" "id" "subnet-id" "jsonSimple"
@@ -507,6 +562,7 @@ function jsonGenericMasterAdd ()
 # OS-Multipart,oci_os_multipart.json,jsonGenericMasterAdd,"os multipart list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
 # OS-Nameserver,oci_os_ns.json,jsonSimple,"os ns get"
 # OS-NameserverMeta,oci_os_ns-metadata.json,jsonSimple,"os ns get-metadata"
+# OS-ObjLCPolicy,oci_os_object-lifecycle-policy.json,jsonGenericMaster,"os object-lifecycle-policy get" "OS-Buckets" "name" "bucket-name" "jsonSimple"
 # OS-Objects,oci_os_object.json,jsonGenericMasterAdd,"os object list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
 # OS-PreauthReqs,oci_os_preauth-request.json,jsonGenericMasterAdd,"os preauth-request list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
 # Search-ResTypes,oci_search_resource-type.json,jsonSimple,"search resource-type list --all"
