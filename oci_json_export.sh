@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.11
+# Version 1.12
 #************************************************************************
 set -e
 
@@ -295,7 +295,7 @@ function jsonSimple ()
   local v_arg1 v_next_page v_fout v_out
   v_arg1="$1"
   echoDebug "${v_oci} ${v_arg1}"
-  v_fout=$(${v_oci} ${v_arg1})
+  v_fout=$(eval "${v_oci} ${v_arg1}")
   if [ -n "$v_fout" ]
   then
     v_next_page=$(echo "${v_fout}" | ${v_jq} -rc '."opc-next-page"')
@@ -519,7 +519,7 @@ function jsonConcat ()
 # FS-Snapshots,oci_fs_snapshot.json,jsonGenericMaster,"fs snapshot list --all" "FS-FileSystems" "id" "file-system-id" "jsonSimple"
 # IAM-ADs,oci_iam_availability-domain.json,jsonSimple,"iam availability-domain list"
 # IAM-AuthTokens,oci_iam_auth-token.json,jsonGenericMaster,"iam auth-token list" "IAM-Users" "id" "user-id" "jsonSimple"
-# IAM-Comparts,oci_iam_compartment.json,jsonSimple,"iam compartment list --all"
+# IAM-Comparts,oci_iam_compartment.json,jsonSimple,"iam compartment list --all --query \"data [?\\\"lifecycle-state\\\" != 'DELETED']\""
 # IAM-CustSecretKeys,oci_iam_customer-secret-key.json,jsonGenericMaster,"iam customer-secret-key list" "IAM-Users" "id" "user-id" "jsonSimple"
 # IAM-DynGroups,oci_iam_dynamic-group.json,jsonSimple,"iam dynamic-group list --all"
 # IAM-Groups,oci_iam_group.json,jsonSimple,"iam group list --all"
