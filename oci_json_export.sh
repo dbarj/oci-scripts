@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.12
+# Version 1.13
 #************************************************************************
 set -e
 
@@ -173,6 +173,16 @@ fi
 ################################################
 ############### CUSTOM FUNCTIONS ###############
 ################################################
+
+function jsonCompartments ()
+{
+  set -e # Exit if error in any call.
+  local v_fout
+  v_fout=$(jsonSimple "iam compartment list --all")
+  ## Remove DELETED compartments to avoid query errors
+  [ -z "$v_fout" ] || v_fout=$(echo "${v_fout}" | ${v_jq} '{data:[.data[] | select(."lifecycle-state" != "DELETED")]}')
+  [ -z "$v_fout" ] || echo "${v_fout}"
+}
 
 function jsonShapes ()
 {
@@ -519,7 +529,7 @@ function jsonConcat ()
 # FS-Snapshots,oci_fs_snapshot.json,jsonGenericMaster,"fs snapshot list --all" "FS-FileSystems" "id" "file-system-id" "jsonSimple"
 # IAM-ADs,oci_iam_availability-domain.json,jsonSimple,"iam availability-domain list"
 # IAM-AuthTokens,oci_iam_auth-token.json,jsonGenericMaster,"iam auth-token list" "IAM-Users" "id" "user-id" "jsonSimple"
-# IAM-Comparts,oci_iam_compartment.json,jsonSimple,"iam compartment list --all --query \"data [?\\\"lifecycle-state\\\" != 'DELETED']\""
+# IAM-Comparts,oci_iam_compartment.json,jsonCompartments
 # IAM-CustSecretKeys,oci_iam_customer-secret-key.json,jsonGenericMaster,"iam customer-secret-key list" "IAM-Users" "id" "user-id" "jsonSimple"
 # IAM-DynGroups,oci_iam_dynamic-group.json,jsonSimple,"iam dynamic-group list --all"
 # IAM-Groups,oci_iam_group.json,jsonSimple,"iam group list --all"
