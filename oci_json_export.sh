@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.13
+# Version 1.14
 #************************************************************************
 set -e
 
@@ -302,18 +302,23 @@ function jsonSimple ()
   set -e # Exit if error in any call.
   [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
   [ "$#" -eq 1 -a "$1" != "" ] || return 1
-  local v_arg1 v_next_page v_fout v_out
+  local v_arg1 v_next_page v_fout v_out v_ret
   v_arg1="$1"
   echoDebug "${v_oci} ${v_arg1}"
-  v_fout=$(eval "${v_oci} ${v_arg1}")
-  if [ -n "$v_fout" ]
+  v_fout=$(eval "${v_oci} ${v_arg1}") && v_ret=$? || v_ret=$?
+  if [ $v_ret -ne 0 ]
+  then
+    echoError "## Command Failed:"
+    echoError "${v_oci} ${v_arg1}"
+    echoError "########"
+  elif [ -n "$v_fout" ]
   then
     v_next_page=$(echo "${v_fout}" | ${v_jq} -rc '."opc-next-page"')
     [ "${v_next_page}" == "null" ] || v_fout=$(echo "$v_fout" | ${v_jq} '.data | {data : .}') # Remove Next-Page Tag if it has one.
     while [ -n "${v_next_page}" -a "${v_next_page}" != "null" ]
     do
       echoDebug "${v_oci} ${v_arg1} --page ${v_next_page}"
-      v_out=$(${v_oci} ${v_arg1} --page "${v_next_page}")
+      v_out=$(eval "${v_oci} ${v_arg1} --page ${v_next_page}")
       v_next_page=$(echo "${v_out}" | ${v_jq} -rc '."opc-next-page"')
       [ -z "$v_out" -o "${v_next_page}" == "null" ] || v_out=$(echo "$v_out" | ${v_jq} '.data | {data : .}') # Remove Next-Page Tag if it has one.
       v_fout=$(jsonConcat "$v_fout" "$v_out")
@@ -616,7 +621,7 @@ function stopIfProcessed ()
   # If function was executed before, print the output and return error. The dynamic eval function will stop if error is returned.
   local v_arg1="$1"
   [ -n "${v_tmpfldr}" ] || return 0
-  if [ -s "${v_tmpfldr}/.${v_arg1}" ]
+  if [ -f "${v_tmpfldr}/.${v_arg1}" ]
   then
     cat "${v_tmpfldr}/.${v_arg1}"
     return 1
@@ -644,8 +649,8 @@ function runAndZip ()
   then
     if [ -s "${v_arg2}.err" ]
     then
-      mv "${v_arg2}.err" "${v_arg2}.msg"
-      zip -qmT "$v_outfile" "${v_arg2}.msg"
+      mv "${v_arg2}.err" "${v_arg2}.log"
+      zip -qmT "$v_outfile" "${v_arg2}.log"
     fi
   else
     if [ -f "${v_arg2}.err" ]
@@ -697,6 +702,7 @@ function main ()
 }
 
 # Start code execution. If ALL_REGIONS, call main for each region.
+echoDebug "BEGIN"
 if [ "${v_param1}" == "ALL_REGIONS" ]
 then
   l_regions=$(IAM-RegionSub | ${v_jq} -r '.data[]."region-name"')
@@ -704,6 +710,7 @@ then
   v_outfile_pref="oci_json_export_$(date '+%Y%m%d%H%M%S')"
   for v_region in $l_regions
   do
+    echo "########################"
     echo "Region ${v_region} set."
     v_oci="${v_oci_orig} --region ${v_region}"
     v_outfile="${v_outfile_pref}_${v_region}.zip"
@@ -712,6 +719,7 @@ then
 else
   main
 fi
+echoDebug "END"
 
 [ -z "${v_tmpfldr}" ] || rmdir ${v_tmpfldr} 2>&- || true
 
