@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Oct/2018 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -e
 
@@ -111,11 +111,6 @@ fi
 if [ "${v_script_steps}" != "all" -a "${v_script_steps}" != "mount" -a "${v_script_steps}" != "umount" ]
 then
   exitError "Valid values for \"\$v_script_steps\" are \"all\", \"mount\" or \"umount\"."
-fi
-
-if [ "${v_script_ask}" == "no" -a "${v_script_steps}" == "all" ]
-then
-  exitError "Can't use \"\$v_script_steps\" as \"all\" and \"\$v_script_ask\" as \"no\" at the same time or would have no time to perform operations."
 fi
 
 if ! $(which ${v_oci} >&- 2>&-)
@@ -293,14 +288,16 @@ then
     v_params+=(--action STOP)
     v_params+=(--max-wait-seconds $v_ocicli_timeout)
     v_params+=(--wait-for-state STOPPED)
-    
+
     ${v_oci} compute instance action "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
     [ $v_ret -ne 0 ] && exitError "Could not stop Target Compute."
-  
+
     v_target_instState="STOPPED"
+  else
+    echo "Instance already stopped."
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ######
@@ -318,14 +315,16 @@ then
     v_params+=(--force)
     v_params+=(--wait-for-state DETACHED)
     v_params+=(--max-wait-seconds $v_ocicli_timeout)
-  
+
     ${v_oci} compute boot-volume-attachment detach "${v_params[@]}" && v_ret=$? || v_ret=$?
     [ $v_ret -ne 0 ] && exitError "Could not detach BV from instance."
-  
+
     v_target_BVAttachState="DETACHED"
+  else
+    echo "BV already detached."
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ######
@@ -343,12 +342,14 @@ then
     v_params+=(--action START)
     v_params+=(--max-wait-seconds $v_ocicli_timeout)
     v_params+=(--wait-for-state RUNNING)
-    
+
     ${v_oci} compute instance action "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
     [ $v_ret -ne 0 ] && exitError "Could not start Support Compute."
+  else
+    echo "Instance already running."
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ######
@@ -371,14 +372,16 @@ then
     v_params+=(--is-read-only false)
     v_params+=(--wait-for-state ATTACHED)
     v_params+=(--max-wait-seconds $v_ocicli_timeout)
-  
+
     v_support_attachVolJson=$(${v_oci} compute volume-attachment attach "${v_params[@]}" | jq '.data') && v_ret=$? || v_ret=$?
     [ $v_ret -ne 0 -o -z "${v_support_attachVolJson}" ] && exitError "Could not attach BV as Volume."
-  
+
     v_support_attachVolState="ATTACHED"
+  else
+    echo "Volume already attached."
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 if [ "${v_support_attachVolState}" == "ATTACHED" ]
@@ -452,9 +455,9 @@ function sshExecute ()
   echo -n "${v_code}"
   echo '## '$(printf '=%.0s' {1..80})
   echo ""
-  
+
   ## Ask if reconfig using SSH
-  
+
   if [ "${v_script_ask}" == "yes" ]; then
     echo "Lines above must be executed in target linux machine."
     echo -n "Type \"YES\" to apply the changes via SSH as opc@${v_support_IP}: "
@@ -475,11 +478,11 @@ function sshExecute ()
       [ $v_ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep ${v_timeout}
       [ $v_ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep 10
     done
-  
+
     ## Update Attachments
     ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no opc@${v_IP} "bash -s" < <(echo "$v_code")
     echo ""
-  
+
   fi
 }
 
@@ -490,7 +493,7 @@ then
     sshExecute "${v_support_IP}" "${v_iscsiadm_mount}"
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ######
@@ -501,17 +504,15 @@ printStep
 
 if [ "${v_exec_step6}" == "yes" ]
 then
-  if [ "${v_script_ask}" == "yes" ]; then
-    echo "Now connect on the instance IP ${v_instanceIP} and perform recovery actions on /${v_target_instName}/"
-    v_read=""
-    while [ "${v_read}" != "CONTINUE" ]
-    do
-      echo "Type \"CONTINUE\" when finished."
-      read v_read
-    done
-  fi
+  echo "Now connect on the instance IP ${v_support_IP} and perform recovery actions on /${v_target_instName}/"
+  v_read=""
+  while [ "${v_read}" != "CONTINUE" ]
+  do
+    echo "Type \"CONTINUE\" when finished."
+    read v_read
+  done
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ######
@@ -527,7 +528,7 @@ then
     sshExecute "${v_support_IP}" "${v_iscsiadm_umount}"
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ######
@@ -545,14 +546,16 @@ then
     v_params+=(--force)
     v_params+=(--wait-for-state DETACHED)
     v_params+=(--max-wait-seconds $v_ocicli_timeout)
-  
+
     ${v_oci} compute volume-attachment detach "${v_params[@]}" && v_ret=$? || v_ret=$?
     [ $v_ret -ne 0 ] && exitError "Could not attach BV as Volume."
-  
+
     v_support_attachVolState="DETACHED"
+  else
+    echo "Volume already detached."
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ######
@@ -570,14 +573,16 @@ then
     v_params+=(--instance-id ${v_target_instID})
     v_params+=(--wait-for-state ATTACHED)
     v_params+=(--max-wait-seconds $v_ocicli_timeout)
-    
+
     ${v_oci} compute boot-volume-attachment attach "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
     [ $v_ret -ne 0 ] && exitError "Could not attach BV back on instance."
-  
+
     v_target_BVAttachState="ATTACHED"
+  else
+    echo "BV already attached."
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ######
@@ -595,14 +600,16 @@ then
     v_params+=(--action START)
     v_params+=(--max-wait-seconds $v_ocicli_timeout)
     v_params+=(--wait-for-state RUNNING)
-    
+
     ${v_oci} compute instance action "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
     [ $v_ret -ne 0 ] && exitError "Could not start Target Compute."
-  
+
     v_target_instState="RUNNING"
+  else
+    echo "Instance already running."
   fi
 else
-  echo "Skipped"
+  echo "Skipped."
 fi
 
 ### END
