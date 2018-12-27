@@ -21,23 +21,25 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -e
 
+[ -n "${v_step}" ] || v_step=1
+
 read -r -d '' v_all_steps << EOM || true
 ## Macro Steps
-# 1  - Export the Image.
-# 2  - Create Pre-Auth URL.
-# 3  - Import the Image in target region.
-# 4  - Remove exported Image object.
-# 5  - Remove Pre-Auth URL.
+# $(printf "%02d\n" $((v_step+0))) - Export the Image.
+# $(printf "%02d\n" $((v_step+1))) - Create Pre-Auth URL.
+# $(printf "%02d\n" $((v_step+2))) - Import the Image in target region.
+# $(printf "%02d\n" $((v_step+3))) - Remove exported Image object.
+# $(printf "%02d\n" $((v_step+4))) - Remove Pre-Auth URL.
 EOM
 
 #### INTERNAL
 v_source_region="us-ashburn-1"
 v_target_region="us-phoenix-1"
-v_os_bucket="xxx"
+v_os_bucket=""
 ####
 
 # Define paths for oci-cli and jq or put them on $PATH. Don't use relative PATHs in the variables below.
@@ -61,16 +63,18 @@ exitError ()
    exit 1
 }
 
-if [ $# -ne 1 ]
+if [ $# -ne 1 -a $# -ne 2 ]
 then
-  echoError "$0: One argument is needed.. given: $#"
+  echoError "$0: One or two arguments are needed.. given: $#"
   echoError "- 1st param = Image Name or OCID"
+  echoError "- 2nd param = Object Storage Bucket (Optional)"
   exit 1
 fi
 
 v_image_name="$1"
 
 [ -n "$v_image_name" ] || exitError "Image Name or OCID can't be null."
+[ -n "$2" ] && v_os_bucket="$2"
 
 if ! $(which ${v_oci} >&- 2>&-)
 then
@@ -102,7 +106,7 @@ setRetion ()
 {
   # Receive region argument and set as oci-cli parameter
   v_oci="$v_oci_orig"
-  v_oci="${v_oci} --region $1"
+  [ -n "$1" ] && v_oci="${v_oci} --region $1"
 }
 
 #### BEGIN
@@ -119,10 +123,10 @@ then
   exit 1
 fi
 
-if [ -z "$v_os_bucket" -o "$v_os_bucket" == "xxx" ]
+if [ -z "$v_os_bucket" ]
 then
   echoError "A pre-created object storage bucket is required for image migration across regions."
-  echoError "Create one and define variable v_os_bucket inside the script with the bucket name."
+  echoError "Create one and pass it as 2nd parameter or define the variable v_os_bucket inside the script."
   exit 1
 fi
 
@@ -173,7 +177,6 @@ v_compartment_id=$(echo "$v_jsonImage" | ${v_jq} -rc '."compartment-id"') && ret
 [ $ret -eq 0 -a -n "$v_compartment_id" ] || exitError "Could not get the image Compartment ID."
 v_compartment_arg="--compartment-id ${v_compartment_id}"
 
-v_step=1
 printStep ()
 {
   echo "Executing Step $v_step"
@@ -195,6 +198,7 @@ v_params+=(--image-id ${v_image_ID})
 v_params+=(--namespace "${v_os_ns}")
 v_params+=(--bucket-name "${v_os_bucket}")
 v_params+=(--name "${v_os_name}")
+
 v_jsonImageExport=$(${v_oci} compute image export to-object "${v_params[@]}") && ret=$? || ret=$?
 [ $ret -eq 0 -a -n "$v_jsonImageExport" ] || exitError "Could not export Image."
 
@@ -224,6 +228,7 @@ v_params+=(--object-name "${v_os_name}")
 v_params+=(--name "${v_preauth_name}")
 v_params+=(--access-type "ObjectRead")
 v_params+=(--time-expires ${v_preauth_expire})
+
 v_jsonPreAuthReq=$(${v_oci} os preauth-request create "${v_params[@]}") && ret=$? || ret=$?
 [ $ret -eq 0 -a -n "$v_jsonPreAuthReq" ] || exitError "Could not create preauth-request."
 
@@ -240,12 +245,16 @@ setRetion "${v_target_region}"
 
 v_preAuthFullURI="https://objectstorage.${v_source_region}.oraclecloud.com${v_preAuthURI}"
 
+v_freeFormTags='{"Source_OCID":"'${v_image_ID}'"}'
+
 v_params=()
 v_params+=(${v_compartment_arg})
 v_params+=(--display-name ${v_image_name})
 v_params+=(--launch-mode NATIVE)
 v_params+=(--source-image-type QCOW2)
 v_params+=(--uri "${v_preAuthFullURI}")
+v_params+=(--freeform-tags "${v_freeFormTags}")
+
 v_jsonImageImport=$(${v_oci} compute image import from-object-uri "${v_params[@]}") && ret=$? || ret=$?
 [ $ret -eq 0 -a -n "$v_jsonImageExport" ] || exitError "Could not import Image."
 
@@ -274,8 +283,9 @@ v_params+=(--namespace "${v_os_ns}")
 v_params+=(--bucket-name "${v_os_bucket}")
 v_params+=(--object-name "${v_os_name}")
 v_params+=(--force)
+
 ${v_oci} os object delete "${v_params[@]}" && ret=$? || ret=$?
-[ $ret -eq 0 ] || exitError "Could not delete preauth-request."
+[ $ret -eq 0 ] || exitError "Could not delete object."
 
 ######
 ###  5
@@ -288,8 +298,11 @@ v_params+=(--namespace "${v_os_ns}")
 v_params+=(--bucket-name "${v_os_bucket}")
 v_params+=(--par-id "${v_preAuthID}")
 v_params+=(--force)
+
 ${v_oci} os preauth-request delete "${v_params[@]}" && ret=$? || ret=$?
 [ $ret -eq 0 ] || exitError "Could not delete preauth-request."
+
+######
 
 exit 0
 ######
