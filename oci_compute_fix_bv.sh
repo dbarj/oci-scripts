@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Oct/2018 by Rodrigo Jorge
-# Version 1.02
+# Version 1.03
 #************************************************************************
 set -e
 
@@ -446,7 +446,7 @@ v_iscsiadm_umount+="sudo iscsiadm -m node -o delete -T ${v_iqn} -p ${v_ipv4}:${v
 
 function sshExecute ()
 {
-  local v_loop v_timeout v_total v_input v_ret v_IP v_code
+  local v_loop v_timeout v_sleep v_total v_input v_ret v_IP v_code
   v_IP="$1"
   v_code="$2"
   echo ""
@@ -471,12 +471,13 @@ function sshExecute ()
     echo 'Checking Server availability..'
     v_loop=1
     v_timeout=5
+    v_sleep=10
     v_total=40
     while [ ${v_loop} -le ${v_total} ]
     do
       timeout ${v_timeout} bash -c "true &>/dev/null </dev/tcp/$v_IP/22" && v_ret=$? || v_ret=$?
-      [ $v_ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep ${v_timeout}
-      [ $v_ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep 10
+      [ $v_ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep 3
+      [ $v_ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep ${v_sleep}
     done
 
     ## Update Attachments
