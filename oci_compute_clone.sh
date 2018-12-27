@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Oct/2018 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -e
 
@@ -66,9 +66,12 @@ function echoError ()
 function exitError ()
 {
    echoError "$1"
-   ( set -o posix ; set ) > /tmp/debug.txt
+   ( set -o posix ; set ) > /tmp/oci_debug.txt
    exit 1
 }
+
+# trap
+trap 'exitError "Code Interrupted."' INT SIGINT SIGTERM
 
 function funcReadVarValidate ()
 {
@@ -251,8 +254,8 @@ v_ocicli_timeout=36000
 
 #### Validade OCI-CLI and PARAMETER
 
-v_test=$(${v_oci} iam compartment list --all 2>&1) && ret=$? || ret=$?
-if [ $ret -ne 0 ]
+v_test=$(${v_oci} iam compartment list --all 2>&1) && v_ret=$? || v_ret=$?
+if [ $v_ret -ne 0 ]
 then
   echoError "oci-cli not able to run \"${v_oci} iam compartment list --all\". Please check error:"
   echoError "$v_test"
@@ -269,17 +272,17 @@ fi
 
 if [ "${v_orig_instName:0:18}" == "ocid1.instance.oc1" ]
 then
-  v_orig_instID=$(${v_oci} compute instance get --instance-id "${v_orig_instName}" | ${v_jq} -rc '.data | select(."lifecycle-state" != "TERMINATED") | ."id"') && ret=$? || ret=$?
-  [ $ret -eq 0 -a -n "$v_orig_instID" ] || exitError "Could not find a compute with the provided OCID."
-  v_orig_instName=$(${v_oci} compute instance get --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data."display-name"') && ret=$? || ret=$?
-  [ $ret -eq 0 -a -n "$v_orig_instName" ] || exitError "Could not get Display Name of compute ${v_orig_instID}"
+  v_orig_instID=$(${v_oci} compute instance get --instance-id "${v_orig_instName}" | ${v_jq} -rc '.data | select(."lifecycle-state" != "TERMINATED") | ."id"') && v_ret=$? || v_ret=$?
+  [ $v_ret -eq 0 -a -n "$v_orig_instID" ] || exitError "Could not find a compute with the provided OCID."
+  v_orig_instName=$(${v_oci} compute instance get --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data."display-name"') && v_ret=$? || v_ret=$?
+  [ $v_ret -eq 0 -a -n "$v_orig_instName" ] || exitError "Could not get Display Name of compute ${v_orig_instID}"
 else
-  v_comps_list=$(${v_oci} iam compartment list --all | ${v_jq} -rc '.data[]."id"') && ret=$? || ret=$?
-  [ $ret -eq 0 -a -n "$v_comps_list" ] || exitError "Could not list Compartments."
+  v_comps_list=$(${v_oci} iam compartment list --all | ${v_jq} -rc '.data[]."id"') && v_ret=$? || v_ret=$?
+  [ $v_ret -eq 0 -a -n "$v_comps_list" ] || exitError "Could not list Compartments."
   for v_comp in $v_comps_list
   do
-    v_out=$(${v_oci} compute instance list --compartment-id "$v_comp" --all | ${v_jq} -rc '.data[] | select(."display-name" == "'"${v_orig_instName}"'" and ."lifecycle-state" != "TERMINATED") | ."id"') && ret=$? || ret=$?
-    [ $ret -eq 0 ] || exitError "Could not search the OCID of compute ${v_orig_instName} in compartment ${v_comp}. Use OCID instead."
+    v_out=$(${v_oci} compute instance list --compartment-id "$v_comp" --all | ${v_jq} -rc '.data[] | select(."display-name" == "'"${v_orig_instName}"'" and ."lifecycle-state" != "TERMINATED") | ."id"') && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 ] || exitError "Could not search the OCID of compute ${v_orig_instName} in compartment ${v_comp}. Use OCID instead."
     if [ -n "$v_out" ]
     then
       [ -z "$v_orig_instID" ] || exitError "More than 1 compute named \"${v_orig_instName}\" found in this Tenancy. Use OCID instead."
@@ -297,21 +300,21 @@ fi
 
 #### Collect Information
 
-v_orig_instJson=$(${v_oci} compute instance get --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data') && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_orig_instJson" ] || exitError "Could not get Json for compute ${v_orig_instName}."
+v_orig_instJson=$(${v_oci} compute instance get --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_orig_instJson" ] || exitError "Could not get Json for compute ${v_orig_instName}."
 
-v_orig_compID=$(echo "$v_orig_instJson" | ${v_jq} -rc '."compartment-id"') && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_orig_compID" ] || exitError "Could not get the instance Compartment ID."
+v_orig_compID=$(echo "$v_orig_instJson" | ${v_jq} -rc '."compartment-id"') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_orig_compID" ] || exitError "Could not get the instance Compartment ID."
 v_orig_compArg="--compartment-id ${v_orig_compID}"
 
-v_orig_VnicsJson=$(${v_oci} compute instance list-vnics --all --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_orig_VnicsJson" ] || exitError "Could not get Json for vnics of ${v_orig_instName}"
+v_orig_VnicsJson=$(${v_oci} compute instance list-vnics --all --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_orig_VnicsJson" ] || exitError "Could not get Json for vnics of ${v_orig_instName}"
 
 v_orig_priVnicJson=$(echo "$v_orig_VnicsJson" | ${v_jq} -rc 'select (."is-primary" == true)')
 v_orig_secVnicJson=$(echo "$v_orig_VnicsJson" | ${v_jq} -rc 'select (."is-primary" != true)')
 
-v_orig_pubIPsJson=$(${v_oci} network public-ip list ${v_orig_compArg} --scope REGION --all | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
-[ $ret -eq 0 ] || exitError "Could not get Json for Public IPs of ${v_orig_instName}"
+v_orig_pubIPsJson=$(${v_oci} network public-ip list ${v_orig_compArg} --scope REGION --all | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 ] || exitError "Could not get Json for Public IPs of ${v_orig_instName}"
 v_orig_reservedPubIPs=$(echo "$v_orig_pubIPsJson" | ${v_jq} -rc '."ip-address"')
 
 v_orig_AD=$(echo "$v_orig_instJson" | ${v_jq} -rc '."availability-domain"')
@@ -329,11 +332,11 @@ v_orig_subnetID=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."subnet-id"')
 v_orig_BVID=$(${v_oci} compute boot-volume-attachment list ${v_orig_compArg} --availability-domain "${v_orig_AD}" --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data[] | ."boot-volume-id"')
 [ -n "$v_orig_BVID" ] || exitError "Could not get Instance Boot Volume ID."
 
-v_orig_BVJson=$(${v_oci} bv boot-volume get --boot-volume-id "${v_orig_BVID}" | ${v_jq} -rc '.data') && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_orig_BVJson" ] || exitError "Could not get Json for BV of compute ${v_orig_instName}"
+v_orig_BVJson=$(${v_oci} bv boot-volume get --boot-volume-id "${v_orig_BVID}" | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_orig_BVJson" ] || exitError "Could not get Json for BV of compute ${v_orig_instName}"
 
-v_orig_attachVolsJson=$(${v_oci} compute volume-attachment list ${v_orig_compArg} --all --instance-id "${v_orig_instID}") && ret=$? || ret=$?
-[ $ret -eq 0 ] || exitError "Could not get Json for Attached Volumes of ${v_orig_instName}"
+v_orig_attachVolsJson=$(${v_oci} compute volume-attachment list ${v_orig_compArg} --all --instance-id "${v_orig_instID}") && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 ] || exitError "Could not get Json for Attached Volumes of ${v_orig_instName}"
 
 v_all_shapes=$(${v_oci} compute shape list ${v_orig_compArg} --all | jq -r '.data[].shape' | sort -u)
 
@@ -364,8 +367,8 @@ then
     v_target_subnetID="${v_orig_subnetID}"
   else
     ## Compartment
-    v_all_compJson=$(${v_oci} iam compartment list --all | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
-    [ $ret -eq 0 -a -n "$v_all_compJson" ] || exitError "Could not get Json for compartments."
+    v_all_compJson=$(${v_oci} iam compartment list --all | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 -a -n "$v_all_compJson" ] || exitError "Could not get Json for compartments."
     v_comps_list=$(echo "${v_all_compJson}" | ${v_jq} -rc '."name"')
     v_orig_compName=$(echo "${v_all_compJson}" | ${v_jq} -rc 'select(."id" == "'${v_orig_compID}'") | ."name"')
     funcReadVarValidate "Choose a target container" "${v_orig_compName}" $(echo "${v_comps_list}" | sort | tr "\n" "," | sed 's/,$//') "Invalid Container."
@@ -373,8 +376,8 @@ then
     v_target_compID=$(echo "${v_all_compJson}" | ${v_jq} -rc 'select(."name" == "'${v_target_compName}'") | ."id"')
     v_target_compArg="--compartment-id ${v_target_compID}"
     ## VCN
-    v_all_vcnJson=$(${v_oci} network vcn list --all ${v_target_compArg} | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
-    [ $ret -eq 0 -a -n "$v_all_vcnJson" ] || exitError "Could not get Json for VCNs."
+    v_all_vcnJson=$(${v_oci} network vcn list --all ${v_target_compArg} | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 -a -n "$v_all_vcnJson" ] || exitError "Could not get Json for VCNs."
     if [ "${v_orig_compName}" == "${v_target_compName}" ]
     then
       v_orig_VCNID=$(${v_oci} network subnet get --subnet-id $v_orig_subnetID | ${v_jq} -rc '.data."vcn-id"')
@@ -387,8 +390,8 @@ then
     v_target_VCNName="${v_return}"
     v_target_VCNID=$(echo "${v_all_vcnJson}" | ${v_jq} -rc 'select(."display-name" == "'${v_target_VCNName}'") | ."id"')
     ## SubNet
-    v_all_subnetJson=$(${v_oci} network subnet list --all ${v_target_compArg} --vcn-id ${v_target_VCNID} | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
-    [ $ret -eq 0 -a -n "$v_all_subnetJson" ] || exitError "Could not get Json for VCNs."
+    v_all_subnetJson=$(${v_oci} network subnet list --all ${v_target_compArg} --vcn-id ${v_target_VCNID} | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 -a -n "$v_all_subnetJson" ] || exitError "Could not get Json for VCNs."
     if [ "${v_orig_compName}" == "${v_target_compName}" -a "${v_orig_VCNName}" == "${v_target_VCNName}" ]
     then
       v_orig_subnetName=$(echo "${v_all_subnetJson}" | ${v_jq} -rc 'select(."id" == "'${v_orig_subnetID}'") | ."display-name"')
@@ -404,21 +407,21 @@ fi
 
 ### GET SOME TARGET INFORMATION
 
-v_target_subnetJson=$(${v_oci} network subnet get --subnet-id ${v_target_subnetID} | ${v_jq} -rc '.data') && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "${v_target_subnetJson}" ] || exitError "Can't find Target Subnet."
+v_target_subnetJson=$(${v_oci} network subnet get --subnet-id ${v_target_subnetID} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "${v_target_subnetJson}" ] || exitError "Can't find Target Subnet."
 
 v_all_IPs=$(${v_oci} network private-ip list --all --subnet-id ${v_target_subnetID} | ${v_jq} -rc '.data[]."ip-address"')
 v_target_CIDR=$(echo "${v_target_subnetJson}" |  ${v_jq} -rc '."cidr-block"')
 
-v_target_compID=$(echo "${v_target_subnetJson}" |  ${v_jq} -rc '."compartment-id"') && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_target_compID" ] || exitError "Could not get the target Compartment ID."
+v_target_compID=$(echo "${v_target_subnetJson}" |  ${v_jq} -rc '."compartment-id"') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_target_compID" ] || exitError "Could not get the target Compartment ID."
 v_target_compArg="--compartment-id ${v_target_compID}"
 
-v_target_AD=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."availability-domain"') && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "${v_target_AD}" ] || exitError "Can't find Target AD."
+v_target_AD=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."availability-domain"') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "${v_target_AD}" ] || exitError "Can't find Target AD."
 
-v_target_allowPub=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."prohibit-public-ip-on-vnic"') && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "${v_target_allowPub}" ] || exitError "Can't get target IP allowance."
+v_target_allowPub=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."prohibit-public-ip-on-vnic"') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "${v_target_allowPub}" ] || exitError "Can't get target IP allowance."
 
 if [ -z "${v_target_IP}" ]
 then
@@ -493,8 +496,8 @@ v_params+=(--display-name "${v_VGName}")
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 v_params+=(--wait-for-state AVAILABLE)
 v_params+=(--source-details "${v_volList}")
-v_jsonVGCreate=$(${v_oci} bv volume-group create "${v_params[@]}") && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_jsonVGCreate" ] || exitError "Could not create Volume Group."
+v_jsonVGCreate=$(${v_oci} bv volume-group create "${v_params[@]}") && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_jsonVGCreate" ] || exitError "Could not create Volume Group."
 
 v_VGID=$(echo "$v_jsonVGCreate"| ${v_jq} -rc '.data."id"')
 
@@ -514,8 +517,8 @@ v_params+=(--type INCREMENTAL)
 v_params+=(--wait-for-state AVAILABLE)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
-v_jsonVGBackup=$(${v_oci} bv volume-group-backup create "${v_params[@]}") && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_jsonVGBackup" ] || exitError "Could not create Volume Group Backup."
+v_jsonVGBackup=$(${v_oci} bv volume-group-backup create "${v_params[@]}") && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_jsonVGBackup" ] || exitError "Could not create Volume Group Backup."
 
 v_VGBackupID=$(echo "$v_jsonVGBackup"| ${v_jq} -rc '.data."id"')
 
@@ -530,8 +533,8 @@ v_params+=(--volume-group-id ${v_VGID})
 v_params+=(--force)
 v_params+=(--wait-for-state TERMINATED)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
-v_exec=$(${v_oci} bv volume-group delete "${v_params[@]}") && ret=$? || ret=$?
-[ $ret -eq 0 ] || exitError "Could not remove Volume Group."
+${v_oci} bv volume-group delete "${v_params[@]}" && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 ] || exitError "Could not remove Volume Group."
 
 ######
 ###  4
@@ -549,8 +552,8 @@ do
     v_orig_BVName=$(echo "${v_orig_BVJson}" | ${v_jq} -rc '."display-name"')
     v_target_BVName=$(echo "${v_orig_BVName}" | sed "${v_target_name_sedrep_rule}")
 
-    v_origBVBkpPolID=$(${v_oci} bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id ${v_orig_BVID} | ${v_jq} -rc '.data[]."policy-id"') && ret=$? || ret=$?
-    [ $ret -eq 0 ] || exitError "Could not get BV Backup Policy ID."
+    v_origBVBkpPolID=$(${v_oci} bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id ${v_orig_BVID} | ${v_jq} -rc '.data[]."policy-id"') && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 ] || exitError "Could not get BV Backup Policy ID."
 
     v_params=()
     v_params+=(${v_target_compArg})
@@ -568,20 +571,20 @@ do
     [ -z "$v_out" -o "$v_out" == "{}" ] || v_params+=(--freeform-tags "$v_out")
     #v_params+=(--size-in-gbs)
 
-    v_target_BVJson=$(${v_oci} bv boot-volume create "${v_params[@]}") && ret=$? || ret=$?
-    [ $ret -eq 0 -a -n "$v_target_BVJson" ] || exitError "Could not create Boot-Volume."
+    v_target_BVJson=$(${v_oci} bv boot-volume create "${v_params[@]}") && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 -a -n "$v_target_BVJson" ] || exitError "Could not create Boot-Volume."
     v_target_BVID=$(echo "$v_target_BVJson"| ${v_jq} -rc '.data."id"')
   elif [ "${v_volBkpID:0:22}" == "ocid1.volumebackup.oc1" ]
   then
-    v_orig_volID=$(${v_oci} bv backup get --volume-backup-id ${v_volBkpID} | ${v_jq} -rc '.data."volume-id"') && ret=$? || ret=$?
-    [ $ret -eq 0 -a -n "$v_orig_volID" ] || exitError "Could not get Volume ID."
-    v_orig_volJson=$(${v_oci} bv volume get --volume-id ${v_orig_volID} | ${v_jq} -rc '.data') && ret=$? || ret=$?
-    [ $ret -eq 0 -a -n "$v_orig_volJson" ] || exitError "Could not get Volume json."
+    v_orig_volID=$(${v_oci} bv backup get --volume-backup-id ${v_volBkpID} | ${v_jq} -rc '.data."volume-id"') && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 -a -n "$v_orig_volID" ] || exitError "Could not get Volume ID."
+    v_orig_volJson=$(${v_oci} bv volume get --volume-id ${v_orig_volID} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 -a -n "$v_orig_volJson" ] || exitError "Could not get Volume json."
     v_orig_VolName=$(echo "${v_orig_volJson}" | ${v_jq} -rc '."display-name"')
     v_target_VolName=$(echo "${v_orig_VolName}" | sed "${v_target_name_sedrep_rule}")
 
-    v_origVolBkpPolID=$(${v_oci} bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id ${v_orig_volID} | ${v_jq} -rc '.data[]."policy-id"') && ret=$? || ret=$?
-    [ $ret -eq 0 ] || exitError "Could not get Volume Backup Policy ID."
+    v_origVolBkpPolID=$(${v_oci} bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id ${v_orig_volID} | ${v_jq} -rc '.data[]."policy-id"') && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 ] || exitError "Could not get Volume Backup Policy ID."
 
     v_params=()
     v_params+=(${v_target_compArg})
@@ -600,8 +603,8 @@ do
     #v_params+=(--size-in-gbs)
     #v_params+=(--size-in-mbs)
 
-    v_target_VolJson=$(${v_oci} bv volume create "${v_params[@]}") && ret=$? || ret=$?
-    [ $ret -eq 0 -a -n "$v_target_VolJson" ] || exitError "Could not create Volume."
+    v_target_VolJson=$(${v_oci} bv volume create "${v_params[@]}") && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 -a -n "$v_target_VolJson" ] || exitError "Could not create Volume."
     v_target_volID=$(echo "$v_target_VolJson"| ${v_jq} -rc '.data."id"')
     v_orig_volList+=(${v_orig_volID})
     v_target_volList+=(${v_target_volID})
@@ -619,8 +622,8 @@ v_params+=(--volume-group-backup-id ${v_VGBackupID})
 v_params+=(--force)
 v_params+=(--wait-for-state TERMINATED)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
-v_exec=$(${v_oci} bv volume-group-backup delete "${v_params[@]}") && ret=$? || ret=$?
-[ $ret -eq 0 ] || exitError "Could not remove Volume Group Backup."
+v_exec=$(${v_oci} bv volume-group-backup delete "${v_params[@]}") && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 ] || echoError "Could not remove Volume Group Backup."
 
 ######
 ###  6
@@ -683,8 +686,8 @@ v_params+=(--subnet-id ${v_target_subnetID})
 v_params+=(--private-ip ${v_target_IP})
 v_params+=(${v_target_compArg})
 
-v_target_instJson=$(${v_oci} compute instance launch "${v_params[@]}") && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_target_instJson" ] || exitError "Could not create cloned Instance."
+v_target_instJson=$(${v_oci} compute instance launch "${v_params[@]}") && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_target_instJson" ] || exitError "Could not create cloned Instance."
 
 v_target_instID=$(echo "$v_target_instJson" | ${v_jq} -rc '.data."id"')
 
@@ -700,15 +703,15 @@ v_out=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."freeform-tags"')
 
 if [ -n "${v_params[*]}" ]
 then
-  v_target_VnicsJson=$(${v_oci} compute instance list-vnics --all --instance-id "${v_target_instID}" | ${v_jq} -rc '.data[]') && ret=$? || ret=$?
-  [ $ret -eq 0 -a -n "$v_target_VnicsJson" ] || exitError "Could not get Json for vnics of ${v_target_instName}"
+  v_target_VnicsJson=$(${v_oci} compute instance list-vnics --all --instance-id "${v_target_instID}" | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
+  [ $v_ret -eq 0 -a -n "$v_target_VnicsJson" ] || exitError "Could not get Json for vnics of ${v_target_instName}"
   v_target_priVnicJson=$(echo "$v_target_VnicsJson" | ${v_jq} -rc 'select (."is-primary" == true) | ."id"')
 
   v_params+=(--vnic-id ${v_target_priVnicJson})
   v_params+=(--force)
   # Primary VNIC update
-  v_exec=$(${v_oci} network vnic update "${v_params[@]}") && ret=$? || ret=$?
-  [ $ret -eq 0 ] || exitError "Could not update primary VNIC."
+  v_exec=$(${v_oci} network vnic update "${v_params[@]}") && v_ret=$? || v_ret=$?
+  [ $v_ret -eq 0 ] || exitError "Could not update primary VNIC."
 fi
 
 ######
@@ -735,8 +738,8 @@ do
   v_params+=(--wait-for-state ATTACHED)
   v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
-  v_exec=$(${v_oci} compute volume-attachment attach "${v_params[@]}") && ret=$? || ret=$?
-  [ $ret -eq 0 ] || exitError "Could not associate cloned Volume."
+  v_exec=$(${v_oci} compute volume-attachment attach "${v_params[@]}") && v_ret=$? || v_ret=$?
+  [ $v_ret -eq 0 ] || exitError "Could not associate cloned Volume."
 
   v_i=$((v_i+1))
 done
@@ -748,8 +751,8 @@ done
 printStep
 
 v_target_imageID=$(echo "$v_target_instJson" | ${v_jq} -rc '.data."image-id"')
-v_target_imageJson=$(${v_oci} compute image get --image-id ${v_target_imageID}) && ret=$? || ret=$?
-[ $ret -eq 0 -a -n "$v_target_imageJson" ] || exitError "Could not get Image json."
+v_target_imageJson=$(${v_oci} compute image get --image-id ${v_target_imageID}) && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 -a -n "$v_target_imageJson" ] || exitError "Could not get Image json."
 v_target_SO=$(echo "$v_target_imageJson" | ${v_jq} -rc '.data."operating-system"')
 
 if [ "${v_target_SO}" == "Windows" ]
@@ -780,52 +783,71 @@ do
   v_iscsiadm+="sudo iscsiadm -m node -T ${v_iqn} -p ${v_ipv4}:${v_port} -l"$'\n'
 done
 
-if [ -n "${v_iscsiadm}" ]
-then
+function sshExecute ()
+{
+  local v_loop v_timeout v_sleep v_total v_input v_ret v_IP v_code
+  v_IP="$1"
+  v_code="$2"
+  echo ""
   echo '## IF YOUR INSTANCE IS LINUX, CONNECT AS OPC AND EXECUTE:'
-  echo '## ----------------------------------------------------------------------'
-  echo -n "${v_iscsiadm}"
-  echo 'sudo reboot'
-  echo '## ----------------------------------------------------------------------'
+  echo '## '$(printf '=%.0s' {1..80})
+  echo -n "${v_code}"
+  echo '## '$(printf '=%.0s' {1..80})
+  echo ""
 
   ## Ask if reconfig using SSH
 
-  echo ""
-  echo "ATTENTION"
-  echo "This is the last step."
-  echo "Lines above must be executed in target linux machine."
-  echo -n "Type \"YES\" to apply the changes via SSH as opc@${v_target_IP}: "
-  read v_input
+  if [ "${v_script_ask}" == "yes" ]; then
+    echo "Lines above must be executed in target linux machine."
+    echo -n "Type \"YES\" to apply the changes via SSH as opc@${v_support_IP}: "
+    read v_input
+  else
+    v_input="YES"
+  fi
   if [ "$v_input" == "YES" ]
   then
     ## Wait SSH UP
     echo 'Checking Server availability..'
     v_loop=1
     v_timeout=5
+    v_sleep=10
     v_total=40
     while [ ${v_loop} -le ${v_total} ]
     do
-      timeout ${v_timeout} bash -c "true &>/dev/null </dev/tcp/$v_target_IP/22" && ret=$? || ret=$?
-      [ $ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep ${v_timeout}
-      [ $ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep 10
+      timeout ${v_timeout} bash -c "true &>/dev/null </dev/tcp/$v_IP/22" && v_ret=$? || v_ret=$?
+      [ $v_ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep 3
+      [ $v_ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep ${v_sleep}
     done
 
     ## Update Attachments
-    ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no opc@${v_target_IP} "bash -s" < <(echo "$v_iscsiadm")
-    ret=$?
-
-    ## Restart Machine
-    echo 'Bouncing the instance..'
-    v_params=()
-    v_params+=(--instance-id "${v_target_instID}")
-    v_params+=(--action SOFTRESET)
-    v_params+=(--wait-for-state RUNNING)
-    v_params+=(--max-wait-seconds $v_ocicli_timeout)
-    v_exec=$(${v_oci} compute instance action "${v_params[@]}") && ret=$? || ret=$?
-    [ $ret -eq 0 ] || exitError "Not able to bounce the instance."
+    ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no opc@${v_IP} "bash -s" < <(echo "$v_code")
+    echo ""
 
   fi
+}
+
+if [ -n "${v_iscsiadm}" ]
+then
+
+  v_script_ask="yes"
+  sshExecute "${v_target_IP}" "${v_iscsiadm}"
+
+  ## Restart Machine
+  echo 'Bouncing the instance..'
+  v_params=()
+  v_params+=(--instance-id "${v_target_instID}")
+  v_params+=(--action SOFTRESET)
+  v_params+=(--wait-for-state RUNNING)
+  v_params+=(--max-wait-seconds $v_ocicli_timeout)
+  
+  ${v_oci} compute instance action "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
+  [ $v_ret -eq 0 ] || exitError "Not able to bounce the instance."
+
 fi
+
+######
+######
+######
 
 echo "SCRIPT EXECUTED SUCCESSFULLY"
 exit 0
