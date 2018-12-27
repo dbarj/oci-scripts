@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.05
+# Version 1.06
 #************************************************************************
 set -e
 
@@ -45,16 +45,18 @@ exitError ()
    exit 1
 }
 
-if [ $# -ne 2 ]
+if [ $# -ne 2 -a $# -ne 3 ]
 then
   echoError "$0: Two arguments are needed.. given: $#"
   echoError "- 1st param = Compute Instance Name or OCID"
   echoError "- 2nd param = Compute Instance Target Shape"
+  echoError "- 3rd param = Region (Optional)"
   exit 1
 fi
 
 v_inst_name="$1"
 v_new_shape="$2"
+v_region="$3"
 
 [ -n "$v_inst_name" ] || exitError "Intance Name or OCID can't be null."
 [ -n "$v_new_shape" ] || exitError "Shape can't be null."
@@ -82,6 +84,7 @@ fi
 
 v_ocicli_timeout=3600
 
+[ -n "${v_region}" ] && v_oci_args="${v_oci_args} --region ${v_region}"
 [ -z "${v_oci_args}" ] || v_oci="${v_oci} ${v_oci_args}"
 
 v_test=$(${v_oci} iam compartment list --all 2>&1) && ret=$? || ret=$?
