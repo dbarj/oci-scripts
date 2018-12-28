@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Oct/2018 by Rodrigo Jorge
-# Version 1.02
+# Version 1.03
 #************************************************************************
 set -e
 
@@ -53,7 +53,7 @@ v_target_instName=""                           # Define if dont want to keep the
 v_target_shape=""                              # Define if dont want to keep the same as source
 v_target_subnetID=""                           # Define if dont want to keep the same as source
 v_target_IP=""                                 # Define if dont want to keep the same as source
-v_target_name_sedrep_rule=""                   # Rule to convert objects name. If NULL will be automatically populated.
+v_sedrep_rule_target_name=""                   # Rule to convert objects name. If NULL will be automatically populated.
 ####
 
 # Helpful functions
@@ -72,6 +72,51 @@ function exitError ()
 
 # trap
 trap 'exitError "Code Interrupted."' INT SIGINT SIGTERM
+
+v_orig_instName="$1"
+[ -n "$2" ] && v_target_instName="$2"
+[ -n "$3" ] && v_target_shape="$3"
+[ -n "$4" ] && v_target_subnetID="$4"
+[ -n "$5" ] && v_target_IP="$5"
+
+# If first parameter starts with '-' or is 'help'
+if [ "${v_orig_instName:0:1}" == "-" -o "${v_orig_instName}" == "help" -o "$#" -eq 0 ]
+then
+  echoError "$0: All parameters, except first, are optional to run this tool."
+  echoError "- 1st param = Source Compute Instance Name or OCID"
+  echoError "- 2nd param = Target Compute Instance Name"
+  echoError "- 3rd param = Target Compute Shape"
+  echoError "- 4th param = Target Subnet ID"
+  echoError "- 5th param = Target IP Address"
+  exit 1
+fi
+
+if ! $(which ${v_oci} >&- 2>&-)
+then
+  echoError "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
+  echoError "Dowload page: https://github.com/oracle/oci-cli"
+  exit 1
+fi
+
+if ! $(which ${v_jq} >&- 2>&-)
+then
+  echoError "Could not find jq binary. Please adapt the path in the script if not in \$PATH."
+  echoError "Download page: https://github.com/stedolan/jq/releases"
+  exit 1
+fi
+
+v_cur_ocicli=$(${v_oci} -v)
+
+if [ "${v_min_ocicli}" != "`echo -e "${v_min_ocicli}\n${v_cur_ocicli}" | sort -V | head -n1`" ]
+then
+  exitError "Minimal oci version required is ${v_min_ocicli}. Found: ${v_cur_ocicli}"
+fi
+
+v_ocicli_timeout=36000
+
+[ -z "${v_oci_args}" ] || v_oci="${v_oci} ${v_oci_args}"
+
+#### FUNCTIONS
 
 function funcReadVarValidate ()
 {
@@ -207,49 +252,6 @@ function in_subnet ()
   echo "${rval}"
 }
 
-v_orig_instName="$1"
-[ -n "${v_target_instName}" ] || v_target_instName="$2"
-[ -n "${v_target_shape}" ]    || v_target_shape="$3"
-[ -n "${v_target_subnetID}" ] || v_target_subnetID="$4"
-[ -n "${v_target_IP}" ]       || v_target_IP="$5"
-
-# If first parameter starts with '-' or is 'help'
-if [ "${v_orig_instName:0:1}" == "-" -o "${v_orig_instName}" == "help" ]
-then
-  echoError "$0: All parameters are optional to run this tool."
-  echoError "- 1st param = Source Compute Instance Name or OCID"
-  echoError "- 2nd param = Target Compute Instance Name"
-  echoError "- 3rd param = Target Compute Shape"
-  echoError "- 4th param = Target Subnet ID"
-  echoError "- 5th param = Target IP Address"
-  exit 1
-fi
-
-if ! $(which ${v_oci} >&- 2>&-)
-then
-  echoError "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
-  echoError "Dowload page: https://github.com/oracle/oci-cli"
-  exit 1
-fi
-
-if ! $(which ${v_jq} >&- 2>&-)
-then
-  echoError "Could not find jq binary. Please adapt the path in the script if not in \$PATH."
-  echoError "Download page: https://github.com/stedolan/jq/releases"
-  exit 1
-fi
-
-v_cur_ocicli=$(${v_oci} -v)
-
-if [ "${v_min_ocicli}" != "`echo -e "${v_min_ocicli}\n${v_cur_ocicli}" | sort -V | head -n1`" ]
-then
-  exitError "Minimal oci version required is ${v_min_ocicli}. Found: ${v_cur_ocicli}"
-fi
-
-v_ocicli_timeout=36000
-
-[ -z "${v_oci_args}" ] || v_oci="${v_oci} ${v_oci_args}"
-
 #### BEGIN
 
 #### Validade OCI-CLI and PARAMETER
@@ -298,7 +300,7 @@ else
   fi
 fi
 
-#### Collect Information
+#### Collect Origin Information
 
 v_orig_instJson=$(${v_oci} compute instance get --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
 [ $v_ret -eq 0 -a -n "$v_orig_instJson" ] || exitError "Could not get Json for compute ${v_orig_instName}."
@@ -310,8 +312,8 @@ v_orig_compArg="--compartment-id ${v_orig_compID}"
 v_orig_VnicsJson=$(${v_oci} compute instance list-vnics --all --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
 [ $v_ret -eq 0 -a -n "$v_orig_VnicsJson" ] || exitError "Could not get Json for vnics of ${v_orig_instName}"
 
-v_orig_priVnicJson=$(echo "$v_orig_VnicsJson" | ${v_jq} -rc 'select (."is-primary" == true)')
-v_orig_secVnicJson=$(echo "$v_orig_VnicsJson" | ${v_jq} -rc 'select (."is-primary" != true)')
+v_orig_vnicPriJson=$(echo "$v_orig_VnicsJson" | ${v_jq} -rc 'select (."is-primary" == true)')
+v_orig_vnicSecJson=$(echo "$v_orig_VnicsJson" | ${v_jq} -rc 'select (."is-primary" != true)')
 
 v_orig_pubIPsJson=$(${v_oci} network public-ip list ${v_orig_compArg} --scope REGION --all | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
 [ $v_ret -eq 0 ] || exitError "Could not get Json for Public IPs of ${v_orig_instName}"
@@ -323,10 +325,10 @@ v_orig_AD=$(echo "$v_orig_instJson" | ${v_jq} -rc '."availability-domain"')
 v_orig_shape=$(echo "$v_orig_instJson" | ${v_jq} -rc '."shape"')
 [ -n "$v_orig_shape" ] || exitError "Could not get Instance Shape."
 
-v_orig_IP=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."private-ip"')
+v_orig_IP=$(echo "$v_orig_vnicPriJson" | ${v_jq} -rc '."private-ip"')
 [ -n "$v_orig_IP" ] || exitError "Could not get Instance Primary Private IP Address."
 
-v_orig_subnetID=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."subnet-id"')
+v_orig_subnetID=$(echo "$v_orig_vnicPriJson" | ${v_jq} -rc '."subnet-id"')
 [ -n "$v_orig_subnetID" ] || exitError "Could not get Instance Primary Subnet ID."
 
 v_orig_BVID=$(${v_oci} compute boot-volume-attachment list ${v_orig_compArg} --availability-domain "${v_orig_AD}" --instance-id "${v_orig_instID}" | ${v_jq} -rc '.data[] | ."boot-volume-id"')
@@ -338,13 +340,17 @@ v_orig_BVJson=$(${v_oci} bv boot-volume get --boot-volume-id "${v_orig_BVID}" | 
 v_orig_attachVolsJson=$(${v_oci} compute volume-attachment list ${v_orig_compArg} --all --instance-id "${v_orig_instID}") && v_ret=$? || v_ret=$?
 [ $v_ret -eq 0 ] || exitError "Could not get Json for Attached Volumes of ${v_orig_instName}"
 
+#### Collect Target Information
+
 v_all_shapes=$(${v_oci} compute shape list ${v_orig_compArg} --all | jq -r '.data[].shape' | sort -u)
 
 if [ -z "${v_target_instName}" ]
 then
-  funcReadVarValidate "Target Instance Name"
+  funcReadVarValidate "Target Instance Name" "$(echo "${v_orig_instName}" | sed "${v_sedrep_rule_target_name}")"
   v_target_instName="${v_return}"
 fi
+
+[ -n "${v_sedrep_rule_target_name}" ] || v_sedrep_rule_target_name="s|${v_orig_instName}|${v_target_instName}|g"
 
 if [ -z "${v_target_shape}" ]
 then
@@ -355,7 +361,7 @@ else
   v_check=$(funcCheckValueInRange "${v_target_shape}" "$(echo "${v_all_shapes}" | tr "\n" "," | sed 's/,$//')") || true
   if [ -z "${v_check}" -o "${v_check}" == "N" ]
   then
-    exitError "Shape does not exist or note available."
+    exitError "Shape does not exist or not available."
   fi
 fi
 
@@ -373,7 +379,7 @@ then
     v_orig_compName=$(echo "${v_all_compJson}" | ${v_jq} -rc 'select(."id" == "'${v_orig_compID}'") | ."name"')
     funcReadVarValidate "Choose a target container" "${v_orig_compName}" $(echo "${v_comps_list}" | sort | tr "\n" "," | sed 's/,$//') "Invalid Container."
     v_target_compName="${v_return}"
-    v_target_compID=$(echo "${v_all_compJson}" | ${v_jq} -rc 'select(."name" == "'${v_target_compName}'") | ."id"')
+    v_target_compID=$(echo "${v_all_compJson}" | ${v_jq} -rc 'select(."name" == "'"${v_target_compName}"'") | ."id"')
     v_target_compArg="--compartment-id ${v_target_compID}"
     ## VCN
     v_all_vcnJson=$(${v_oci} network vcn list --all ${v_target_compArg} | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
@@ -388,10 +394,10 @@ then
     v_vcns_list=$(echo "${v_all_vcnJson}" | ${v_jq} -rc '."display-name" + " - " + ."cidr-block"')
     funcReadVarValidate "Choose a target VCN" "${v_orig_VCNName}" "$(echo "${v_vcns_list}" | sort | tr "\n" "," | sed 's/,$//')" "Invalid VCN." ' - '
     v_target_VCNName="${v_return}"
-    v_target_VCNID=$(echo "${v_all_vcnJson}" | ${v_jq} -rc 'select(."display-name" == "'${v_target_VCNName}'") | ."id"')
+    v_target_VCNID=$(echo "${v_all_vcnJson}" | ${v_jq} -rc 'select(."display-name" == "'"${v_target_VCNName}"'") | ."id"')
     ## SubNet
     v_all_subnetJson=$(${v_oci} network subnet list --all ${v_target_compArg} --vcn-id ${v_target_VCNID} | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
-    [ $v_ret -eq 0 -a -n "$v_all_subnetJson" ] || exitError "Could not get Json for VCNs."
+    [ $v_ret -eq 0 -a -n "$v_all_subnetJson" ] || exitError "Could not get Json for Subnets."
     if [ "${v_orig_compName}" == "${v_target_compName}" -a "${v_orig_VCNName}" == "${v_target_VCNName}" ]
     then
       v_orig_subnetName=$(echo "${v_all_subnetJson}" | ${v_jq} -rc 'select(."id" == "'${v_orig_subnetID}'") | ."display-name"')
@@ -401,11 +407,9 @@ then
     v_subnets_list=$(echo "${v_all_subnetJson}" | ${v_jq} -rc '."display-name" + " - " + ."cidr-block"')
     funcReadVarValidate "Choose a target Subnet" "${v_orig_subnetName}" "$(echo "${v_subnets_list}" | sort | tr "\n" "," | sed 's/,$//')" "Invalid Subnet." ' - '
     v_target_subnetName="${v_return}"
-    v_target_subnetID=$(echo "${v_all_subnetJson}" | ${v_jq} -rc 'select(."display-name" == "'${v_target_subnetName}'") | ."id"')
+    v_target_subnetID=$(echo "${v_all_subnetJson}" | ${v_jq} -rc 'select(."display-name" == "'"${v_target_subnetName}"'") | ."id"')
   fi
 fi
-
-### GET SOME TARGET INFORMATION
 
 v_target_subnetJson=$(${v_oci} network subnet get --subnet-id ${v_target_subnetID} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
 [ $v_ret -eq 0 -a -n "${v_target_subnetJson}" ] || exitError "Can't find Target Subnet."
@@ -455,7 +459,9 @@ else
   (( $(in_subnet "${v_target_CIDR}" "${v_target_IP}") )) || exitError "IP \"${v_target_IP}\" not in $v_target_CIDR block."
 fi
 
-[ -n "${v_target_name_sedrep_rule}" ] || v_target_name_sedrep_rule="s|${v_orig_instName}|${v_target_instName}|g"
+#####
+#####
+#####
 
 v_step=1
 printStep ()
@@ -550,7 +556,7 @@ do
   if [ "${v_volBkpID:0:26}" == "ocid1.bootvolumebackup.oc1" ]
   then
     v_orig_BVName=$(echo "${v_orig_BVJson}" | ${v_jq} -rc '."display-name"')
-    v_target_BVName=$(echo "${v_orig_BVName}" | sed "${v_target_name_sedrep_rule}")
+    v_target_BVName=$(echo "${v_orig_BVName}" | sed "${v_sedrep_rule_target_name}")
 
     v_origBVBkpPolID=$(${v_oci} bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id ${v_orig_BVID} | ${v_jq} -rc '.data[]."policy-id"') && v_ret=$? || v_ret=$?
     [ $v_ret -eq 0 ] || exitError "Could not get BV Backup Policy ID."
@@ -581,7 +587,7 @@ do
     v_orig_volJson=$(${v_oci} bv volume get --volume-id ${v_orig_volID} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
     [ $v_ret -eq 0 -a -n "$v_orig_volJson" ] || exitError "Could not get Volume json."
     v_orig_VolName=$(echo "${v_orig_volJson}" | ${v_jq} -rc '."display-name"')
-    v_target_VolName=$(echo "${v_orig_VolName}" | sed "${v_target_name_sedrep_rule}")
+    v_target_VolName=$(echo "${v_orig_VolName}" | sed "${v_sedrep_rule_target_name}")
 
     v_origVolBkpPolID=$(${v_oci} bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id ${v_orig_volID} | ${v_jq} -rc '.data[]."policy-id"') && v_ret=$? || v_ret=$?
     [ $v_ret -eq 0 ] || exitError "Could not get Volume Backup Policy ID."
@@ -635,17 +641,17 @@ v_params=()
 
 # Commented to avoid wrong names. Better to let it be generated automatically from cloned Instance Name.
 ## # --vnic-display-name
-## v_out=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."display-name"')
-## [ -z "$v_out" ] || v_params+=(--vnic-display-name $(echo "${v_out}" | sed "${v_target_name_sedrep_rule}"))
+## v_out=$(echo "$v_orig_vnicPriJson" | ${v_jq} -rc '."display-name"')
+## [ -z "$v_out" ] || v_params+=(--vnic-display-name $(echo "${v_out}" | sed "${v_sedrep_rule_target_name}"))
 ## # --hostname-label
-## v_out=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."hostname-label"')
-## [ -z "$v_out" ] || v_params+=(--hostname-label $(echo "${v_out}" | sed "${v_target_name_sedrep_rule}"))
+## v_out=$(echo "$v_orig_vnicPriJson" | ${v_jq} -rc '."hostname-label"')
+## [ -z "$v_out" ] || v_params+=(--hostname-label $(echo "${v_out}" | sed "${v_sedrep_rule_target_name}"))
 
 # --skip-source-dest-check
-v_out=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."skip-source-dest-check"')
+v_out=$(echo "$v_orig_vnicPriJson" | ${v_jq} -rc '."skip-source-dest-check"')
 [ -z "$v_out" ] || v_params+=(--skip-source-dest-check "$v_out")
 # --assign-public-ip
-v_out=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."public-ip" // empty')
+v_out=$(echo "$v_orig_vnicPriJson" | ${v_jq} -rc '."public-ip" // empty')
 if [ -n "$v_out" -a "${v_target_allowPub}" == "false" ]
 then
   if grep -q -F -x "$v_out" <(echo "$v_orig_reservedPubIPs")
@@ -695,19 +701,19 @@ v_target_instID=$(echo "$v_target_instJson" | ${v_jq} -rc '.data."id"')
 
 v_params=()
 # --defined-tags
-v_out=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."defined-tags"')
+v_out=$(echo "$v_orig_vnicPriJson" | ${v_jq} -rc '."defined-tags"')
 [ -z "$v_out" -o "$v_out" == "{}" ] || v_params+=(--defined-tags "$v_out")
 # --freeform-tags
-v_out=$(echo "$v_orig_priVnicJson" | ${v_jq} -rc '."freeform-tags"')
+v_out=$(echo "$v_orig_vnicPriJson" | ${v_jq} -rc '."freeform-tags"')
 [ -z "$v_out" -o "$v_out" == "{}" ] || v_params+=(--freeform-tags "$v_out")
 
 if [ -n "${v_params[*]}" ]
 then
   v_target_VnicsJson=$(${v_oci} compute instance list-vnics --all --instance-id "${v_target_instID}" | ${v_jq} -rc '.data[]') && v_ret=$? || v_ret=$?
   [ $v_ret -eq 0 -a -n "$v_target_VnicsJson" ] || exitError "Could not get Json for vnics of ${v_target_instName}"
-  v_target_priVnicJson=$(echo "$v_target_VnicsJson" | ${v_jq} -rc 'select (."is-primary" == true) | ."id"')
+  v_target_vnicPriJson=$(echo "$v_target_VnicsJson" | ${v_jq} -rc 'select (."is-primary" == true) | ."id"')
 
-  v_params+=(--vnic-id ${v_target_priVnicJson})
+  v_params+=(--vnic-id ${v_target_vnicPriJson})
   v_params+=(--force)
   # Primary VNIC update
   v_exec=$(${v_oci} network vnic update "${v_params[@]}") && v_ret=$? || v_ret=$?
@@ -799,7 +805,7 @@ function sshExecute ()
 
   if [ "${v_script_ask}" == "yes" ]; then
     echo "Lines above must be executed in target linux machine."
-    echo -n "Type \"YES\" to apply the changes via SSH as opc@${v_support_IP}: "
+    echo -n "Type \"YES\" to apply the changes via SSH as opc@${v_IP}: "
     read v_input
   else
     v_input="YES"
