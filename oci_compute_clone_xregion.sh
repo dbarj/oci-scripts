@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Nov/2018 by Rodrigo Jorge
-# Version 1.06
+# Version 1.07
 #************************************************************************
 set -e
 
@@ -45,7 +45,7 @@ v_target_IP=""
 v_target_shape=""
 v_os_bucketName=""
 v_sedrep_rule_target_name=""
-v_script_ask=""
+v_script_ask="yes"
 ####
 
 read -r -d '' v_all_steps << EOM || true
