@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Oct/2018 by Rodrigo Jorge
-# Version 1.03
+# Version 1.04
 #************************************************************************
 set -e
 
@@ -460,7 +460,7 @@ function sshExecute ()
 
   if [ "${v_script_ask}" == "yes" ]; then
     echo "Lines above must be executed in target linux machine."
-    echo -n "Type \"YES\" to apply the changes via SSH as opc@${v_support_IP}: "
+    echo -n "Type \"YES\" to apply the changes via SSH as opc@${v_IP}: "
     read v_input
   else
     v_input="YES"
