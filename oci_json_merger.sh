@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -e
 
@@ -78,9 +78,10 @@ fi
 
 function mergeJson ()
 {
+  set -e # Exit if error in any call.
   [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || echoError "${FUNCNAME[0]} needs 2 parameters"
   [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || return 1
-  local v_file1 v_file2 v_out v_comp
+  local v_file1 v_file2 v_out v_comp v_file1_cont v_file2_cont v_chk_array
   v_file1=$1
   v_file2=$2
   [ -f "${v_file1}" ] || exitError "File ${v_file1} does not exist."
@@ -89,8 +90,7 @@ function mergeJson ()
   then
     cat "${v_file2}"
     return 0
-  fi
-  if [ ! -s "${v_file2}" ]
+  elif [ ! -s "${v_file2}" ]
   then
     cat "${v_file1}"
     return 0
@@ -101,7 +101,13 @@ function mergeJson ()
     cat "${v_file1}"
     return 0
   fi
-  v_out=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' "${v_file1}" "${v_file2}")
+  v_file1_cont=$(cat "${v_file1}")
+  v_file2_cont=$(cat "${v_file2}")
+  v_chk_array=$(echo "${v_file1_cont}" | ${v_jq} -r '.data | if type=="array" then "yes" else "no" end')
+  [ "${v_chk_array}" == "no" ] && v_file1_cont=$(echo "$v_file1_cont" | ${v_jq} '.data | {"data":[.]}')
+  v_chk_array=$(echo "${v_file2_cont}" | ${v_jq} -r '.data | if type=="array" then "yes" else "no" end')
+  [ "${v_chk_array}" == "no" ] && v_file2_cont=$(echo "$v_file2_cont" | ${v_jq} '.data | {"data":[.]}')
+  v_out=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_file1_cont") <(echo "$v_file2_cont"))
   ## Remove Duplicates
   [ -z "$v_out" ] || v_out=$(echo "${v_out}" | ${v_jq} '.data | unique | {data : .}')
   [ -z "$v_out" ] || echo "${v_out}"
