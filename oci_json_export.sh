@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.15
+# Version 1.16
 #************************************************************************
 set -e
 
@@ -212,8 +212,8 @@ function jsonBkpPolAssign ()
 {
   set -e # Exit if error in any call.
   local v_out v_fout
-  v_fout=$(jsonGenericMaster "bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment" "BV-Volumes" "id" "asset-id" "jsonSimple")
-  v_out=$(jsonGenericMaster "bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment" "BV-BVolumes" "id" "asset-id" "jsonSimple")
+  v_fout=$(jsonGenericMaster "bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment" "BV-Volumes" "id:asset-id" "jsonSimple")
+  v_out=$(jsonGenericMaster "bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment" "BV-BVolumes" "id:asset-id" "jsonSimple")
   v_fout=$(jsonConcat "$v_fout" "$v_out")
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
@@ -361,7 +361,7 @@ function jsonAllCompart ()
   set -e # Exit if error in any call.
   [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
   [ "$#" -eq 1 -a "$1" != "" ] || return 1
-  jsonGenericMaster "$1" "IAM-Comparts" "id" "compartment-id" "jsonSimple"
+  jsonGenericMaster "$1" "IAM-Comparts" "id:compartment-id" "jsonSimple"
 }
 
 function jsonAllCompartAddTag ()
@@ -370,7 +370,7 @@ function jsonAllCompartAddTag ()
   set -e # Exit if error in any call.
   [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
   [ "$#" -eq 1 -a "$1" != "" ] || return 1
-  jsonGenericMasterAdd "$1" "IAM-Comparts" "id" "compartment-id" "jsonSimple" "compartment-id"
+  jsonGenericMasterAdd "$1" "IAM-Comparts" "id:compartment-id:compartment-id" "jsonSimple"
 }
 
 function jsonAllAD ()
@@ -379,7 +379,7 @@ function jsonAllAD ()
   set -e # Exit if error in any call.
   [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
   [ "$#" -eq 1 -a "$1" != "" ] || return 1
-  jsonGenericMaster "$1" "IAM-ADs" "name" "availability-domain" "jsonAllCompart"
+  jsonGenericMaster "$1" "IAM-ADs" "name:availability-domain" "jsonAllCompart"
 }
 
 function jsonAllVCN ()
@@ -388,56 +388,44 @@ function jsonAllVCN ()
   set -e # Exit if error in any call.
   [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
   [ "$#" -eq 1 -a "$1" != "" ] || return 1
-  jsonGenericMaster "$1" "Net-VCNs" "id" "vcn-id" "jsonAllCompart"
+  jsonGenericMaster "$1" "Net-VCNs" "id:vcn-id" "jsonAllCompart"
 }
 
 function jsonGenericMaster ()
 {
   set -e # Exit if error in any call.
-  [ "$#" -eq 5 ] || echoError "${FUNCNAME[0]} needs 5 parameters"
-  [ "$#" -eq 5 ] || return 1
-  local v_arg1 v_arg2 v_arg3 v_arg4 v_arg5 v_out v_fout l_itens v_item
+  [ "$#" -eq 4 ] || echoError "${FUNCNAME[0]} needs 4 parameters"
+  [ "$#" -eq 4 ] || return 1
+  local v_arg1 v_arg2 v_arg3 v_arg4 v_out v_fout l_itens v_item v_arg_vect v_param_vect v_tags v_params v_i
   v_arg1="$1" # Main oci call
   v_arg2="$2" # Subfunction 1 - FuncName
-  v_arg3="$3" # Subfunction 1 - Tag to get
-  v_arg4="$4" # Subfunction 1 - Param
-  v_arg5="$5" # Subfunction 2 - FuncName
-  v_fout=""
-  l_itens=$(${v_arg2} | ${v_jq} -r '.data[]."'${v_arg3}'"' | sort -u)
-  for v_item in $l_itens
-  do
-    v_out=$(${v_arg5} "${v_arg1} --${v_arg4} $v_item")
-    v_fout=$(jsonConcat "$v_fout" "$v_out")
-  done
-  [ -z "$v_fout" ] || echo "${v_fout}"
-}
+  v_arg3="$3" # Subfunction 1 - Vector (Tag1 to get, Param1, Tag2 to get, Param2, ...)
+  v_arg4="$4" # Subfunction 2 - FuncName
 
-function jsonGenericMaster2 ()
-{
-  set -e # Exit if error in any call.
-  [ "$#" -eq 7 ] || echoError "${FUNCNAME[0]} needs 7 parameters"
-  [ "$#" -eq 7 ] || return 1
-  local v_arg1 v_arg2 v_arg3 v_arg4 v_arg5 v_arg6 v_arg7 v_out v_fout l_itens v_item v_item1 v_item2
-  v_arg1="$1" # Main oci call
-  v_arg2="$2" # Subfunction 1 - FuncName
-  v_arg3="$3" # Subfunction 1 - Tag1 to get
-  v_arg4="$4" # Subfunction 1 - Param1
-  v_arg5="$5" # Subfunction 1 - Tag2 to get
-  v_arg6="$6" # Subfunction 1 - Param2
-  v_arg7="$7" # Subfunction 2 - FuncName
-  v_fout=""
-  v_item1=""
-  l_itens=$(${v_arg2} | ${v_jq} -r '.data[] | ."'${v_arg3}'",."'${v_arg5}'"')
+  v_param_vect=() # Vector to hold v_arg3 odd entries.
+  v_arg_vect=(${v_arg3//:/ })
+
+  for v_i in "${!v_arg_vect[@]}"
+  do
+    [ $((v_i%2)) -eq 0 ] && v_tags="${v_tags}.\"${v_arg_vect[v_i]}\","
+    [ $((v_i%2)) -ne 0 ] && v_param_vect+=(${v_arg_vect[v_i]})
+  done
+
+  v_tags=$(echo $v_tags | sed 's/,$//')
+  l_itens=$(${v_arg2} | ${v_jq} -r '.data[] | '$v_tags' ')
+  v_i=0
+
   for v_item in $l_itens
   do
-    if [ -z "$v_item1" ]
+    v_params="${v_params}--${v_param_vect[v_i]} $v_item "
+    v_i=$((v_i+1))
+    if [ $v_i -eq ${#v_param_vect[@]} ]
     then
-      v_item1="$v_item"
-    else
-      v_item2="$v_item"
-      v_out=$(${v_arg7} "${v_arg1} --${v_arg4} $v_item1 --${v_arg6} $v_item2")
+      v_params=$(echo $v_params | sed 's/ $//')
+      v_out=$(${v_arg4} "${v_arg1} ${v_params}")
       v_fout=$(jsonConcat "$v_fout" "$v_out")
-      v_item1=""
+      v_i=0
+      v_params=""
     fi
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
@@ -446,23 +434,47 @@ function jsonGenericMaster2 ()
 function jsonGenericMasterAdd ()
 {
   set -e # Exit if error in any call.
-  [ "$#" -eq 6 ] || echoError "${FUNCNAME[0]} needs 6 parameters"
-  [ "$#" -eq 6 ] || return 1
-  local v_arg1 v_arg2 v_arg3 v_arg4 v_arg5 v_arg6 v_out v_fout l_itens v_item v_chk
+  [ "$#" -eq 4 ] || echoError "${FUNCNAME[0]} needs 4 parameters"
+  [ "$#" -eq 4 ] || return 1
+  local v_arg1 v_arg2 v_arg3 v_arg4 v_out v_fout l_itens v_item v_arg_vect v_param_vect v_tags v_params v_i v_chk v_newit_vect v_newits 
   v_arg1="$1" # Main oci call
   v_arg2="$2" # Subfunction 1 - FuncName
-  v_arg3="$3" # Subfunction 1 - Tag
-  v_arg4="$4" # Subfunction 1 - Param
-  v_arg5="$5" # Subfunction 2 - FuncName
-  v_arg6="$6" # New Tag Name
-  v_fout=""
-  l_itens=$(${v_arg2} | ${v_jq} -r '.data[]."'${v_arg3}'"' | sort -u)
+  v_arg3="$3" # Subfunction 1 - Vector (Tag1 to get, Param1, New Tag Name 1, Tag2 to get, Param2, New Tag Name 2, ...)
+  v_arg4="$4" # Subfunction 2 - FuncName
+
+  v_param_vect=() # Vector to hold v_arg3 every 1/3 entry.
+  v_newit_vect=() # Vector to hold v_arg3 every 3/3 entry.
+  v_arg_vect=(${v_arg3//:/ })
+
+  for v_i in "${!v_arg_vect[@]}"
+  do
+    [ $((v_i%3)) -eq 0 ] && v_tags="${v_tags}.\"${v_arg_vect[v_i]}\","
+    [ $((v_i%3)) -eq 1 ] && v_param_vect+=(${v_arg_vect[v_i]})
+    [ $((v_i%3)) -eq 2 ] && v_newit_vect+=(${v_arg_vect[v_i]})
+  done
+
+  v_tags=$(echo $v_tags | sed 's/,$//')
+  l_itens=$(${v_arg2} | ${v_jq} -r '.data[] | '$v_tags' ')
+  v_i=0
+
   for v_item in $l_itens
   do
-    v_out=$(${v_arg5} "${v_arg1} --${v_arg4} $v_item")
-    v_chk=$(echo "$v_out" | ${v_jq} '.data // empty')
-    [ -z "$v_chk" ] || v_out=$(echo "$v_out" | ${v_jq} '.data[] += {"'${v_arg6}'":"'"$v_item"'"}')
-    [ -z "$v_chk" ] || v_fout=$(jsonConcat "$v_fout" "$v_out")
+    v_params="${v_params}--${v_param_vect[v_i]} $v_item "
+    v_newits="${v_newits}\"${v_newit_vect[v_i]}\":\"$v_item\","
+    v_i=$((v_i+1))
+    if [ $v_i -eq ${#v_param_vect[@]} ]
+    then
+      v_params=$(echo $v_params | sed 's/ $//')
+      v_newits=$(echo $v_newits | sed 's/,$//')
+      v_out=$(${v_arg4} "${v_arg1} ${v_params}")
+      v_chk=$(echo "$v_out" | ${v_jq} '.data // empty' | jq -r 'if type=="array" then "yes" else "no" end')
+      [ "$v_chk" == "no" ] && v_out=$(echo "$v_out" | ${v_jq} '.data += {'${v_newits}'}')
+      [ "$v_chk" == "yes" ] && v_out=$(echo "$v_out" | ${v_jq} '.data[] += {'${v_newits}'}')
+      [ -z "$v_chk" ] || v_fout=$(jsonConcat "$v_fout" "$v_out")
+      v_i=0
+      v_params=""
+      v_newits=""
+    fi
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
@@ -533,66 +545,80 @@ function jsonConcat ()
 # Comp-Images,oci_compute_image.json,jsonImages
 # Comp-InstConsConns,oci_compute_instance-console-connection.json,jsonAllCompart,"compute instance-console-connection list --all"
 # Comp-Instances,oci_compute_instance.json,jsonAllCompart,"compute instance list --all"
-# Comp-PicAgrees,oci_compute_pic_agreements.json,jsonGenericMaster2,"compute pic agreements get" "Comp-PicVersions" "listing-id" "listing-id" "listing-resource-version" "resource-version" "jsonSimple"
+# Comp-PicAgrees,oci_compute_pic_agreements.json,jsonGenericMaster,"compute pic agreements get" "Comp-PicVersions" "listing-id:listing-id:listing-resource-version:resource-version" "jsonSimple"
 # Comp-PicListing,oci_compute_pic_listing.json,jsonSimple,"compute pic listing list --all"
 # Comp-PicSubs,oci_compute_pic_subscription.json,jsonAllCompart,"compute pic subscription list --all"
-# Comp-PicVersions,oci_compute_pic_version.json,jsonGenericMaster,"compute pic version list --all" "Comp-PicListing" "listing-id" "listing-id" "jsonSimple"
+# Comp-PicVersions,oci_compute_pic_version.json,jsonGenericMaster,"compute pic version list --all" "Comp-PicListing" "listing-id:listing-id" "jsonSimple"
 # Comp-Shapes,oci_compute_shape.json,jsonShapes
 # Comp-VnicAttachs,oci_compute_vnic-attachment.json,jsonAllCompart,"compute vnic-attachment list --all"
 # Comp-VolAttachs,oci_compute_volume-attachment.json,jsonAllCompart,"compute volume-attachment list --all"
 # CompMgt-InstConfList,oci_compute-management_instance-configuration_list.json,jsonAllCompart,"compute-management instance-configuration list --all"
-# CompMgt-InstConf,oci_compute-management_instance-configuration.json,jsonGenericMaster,"compute-management instance-configuration get" "CompMgt-InstConfList" "id" "instance-configuration-id" "jsonSimple"
+# CompMgt-InstConf,oci_compute-management_instance-configuration.json,jsonGenericMaster,"compute-management instance-configuration get" "CompMgt-InstConfList" "id:instance-configuration-id" "jsonSimple"
 # CompMgt-InstPoolList,oci_compute-management_instance-pool_list.json,jsonAllCompart,"compute-management instance-pool list --all"
-# CompMgt-InstPool,oci_compute-management_instance-pool.json,jsonGenericMaster,"compute-management instance-pool get" "CompMgt-InstPoolList" "id" "instance-pool-id" "jsonSimple"
-# CompMgt-InstPoolInsts,oci_compute-management_instance-pool_list-instances.json,jsonGenericMaster2,"compute-management instance-pool list-instances" "CompMgt-InstPoolList" "id" "instance-pool-id" "compartment-id" "compartment-id" "jsonSimple"
+# CompMgt-InstPool,oci_compute-management_instance-pool.json,jsonGenericMaster,"compute-management instance-pool get" "CompMgt-InstPoolList" "id:instance-pool-id" "jsonSimple"
+# CompMgt-InstPoolInsts,oci_compute-management_instance-pool_list-instances.json,jsonGenericMaster,"compute-management instance-pool list-instances" "CompMgt-InstPoolList" "id:instance-pool-id:compartment-id:compartment-id" "jsonSimple"
 # DB-AutDB,oci_db_autonomous-database.json,jsonAllCompart,"db autonomous-database list --all"
 # DB-AutDBBkp,oci_db_autonomous-database-backup.json,jsonAllCompart,"db autonomous-database-backup list --all"
 # DB-AutDW,oci_db_autonomous-data-warehouse.json,jsonAllCompart,"db autonomous-data-warehouse list --all"
 # DB-AutDWBkp,oci_db_autonomous-data-warehouse-backup.json,jsonAllCompart,"db autonomous-data-warehouse-backup list --all"
 # DB-Backup,oci_db_backup.json,jsonAllCompart,"db backup list --all"
-# DB-DGAssoc,oci_db_data-guard-association.json,jsonGenericMaster,"db data-guard-association list --all" "DB-Database" "id" "database-id" "jsonSimple"
-# DB-Database,oci_db_database.json,jsonGenericMaster2,"db database list" "DB-System" "id" "db-system-id" "compartment-id" "compartment-id" "jsonSimple"
-# DB-ExtBkpJob,oci_db_external-backup-job.json,jsonGenericMaster,"db external-backup-job get" "DB-Backup" "id" "backup-id" "jsonSimple"
-# DB-Nodes,oci_db_node.json,jsonGenericMaster2,"db node list --all" "DB-System" "id" "db-system-id" "compartment-id" "compartment-id" "jsonSimple"
-# DB-Patch-ByDB,oci_db_patch_by-database.json,jsonGenericMaster,"db patch list by-database" "DB-Database" "id" "database-id" "jsonSimple"
-# DB-Patch-ByDS,oci_db_patch_by-db-system.json,jsonGenericMaster,"db patch list by-db-system" "DB-System" "id" "db-system-id" "jsonSimple"
-# DB-PatchHist-ByDB,oci_db_patch-history_by-database.json,jsonGenericMaster,"db patch-history list by-database" "DB-Database" "id" "database-id" "jsonSimple"
-# DB-PatchHist-ByDS,oci_db_patch-history_by-db-system.json,jsonGenericMaster,"db patch-history list by-db-system" "DB-System" "id" "db-system-id" "jsonSimple"
+# DB-DGAssoc,oci_db_data-guard-association.json,jsonGenericMaster,"db data-guard-association list --all" "DB-Database" "id:database-id" "jsonSimple"
+# DB-Database,oci_db_database.json,jsonGenericMaster,"db database list" "DB-System" "id:db-system-id:compartment-id:compartment-id" "jsonSimple"
+# DB-ExtBkpJob,oci_db_external-backup-job.json,jsonGenericMaster,"db external-backup-job get" "DB-Backup" "id:backup-id" "jsonSimple"
+# DB-Nodes,oci_db_node.json,jsonGenericMaster,"db node list --all" "DB-System" "id:db-system-id:compartment-id:compartment-id" "jsonSimple"
+# DB-Patch-ByDB,oci_db_patch_by-database.json,jsonGenericMaster,"db patch list by-database" "DB-Database" "id:database-id" "jsonSimple"
+# DB-Patch-ByDS,oci_db_patch_by-db-system.json,jsonGenericMaster,"db patch list by-db-system" "DB-System" "id:db-system-id" "jsonSimple"
+# DB-PatchHist-ByDB,oci_db_patch-history_by-database.json,jsonGenericMaster,"db patch-history list by-database" "DB-Database" "id:database-id" "jsonSimple"
+# DB-PatchHist-ByDS,oci_db_patch-history_by-db-system.json,jsonGenericMaster,"db patch-history list by-db-system" "DB-System" "id:db-system-id" "jsonSimple"
 # DB-System,oci_db_system.json,jsonAllCompart,"db system list --all"
-# DB-SystemShape,oci_db_system-shape.json,jsonGenericMasterAdd,"db system-shape list --all" "IAM-ADs" "name" "availability-domain" "jsonAllCompartAddTag" "availability-domain"
+# DB-SystemShape,oci_db_system-shape.json,jsonGenericMasterAdd,"db system-shape list --all" "IAM-ADs" "name:availability-domain:availability-domain" "jsonAllCompartAddTag"
 # DB-Version,oci_db_version.json,jsonAllCompartAddTag,"db version list --all"
 # DNS-Zones,oci_dns_zone.json,jsonAllCompart,"dns zone list --all"
 # Email-Senders,oci_email_sender.json,jsonAllCompart,"email sender list --all"
-# Email-Supps,oci_email_suppression.json,jsonGenericMaster,"email suppression list --all" "IAM-Comparts" "compartment-id" "compartment-id" "jsonSimple"
+# Email-Supps,oci_email_suppression.json,jsonGenericMaster,"email suppression list --all" "IAM-Comparts" "compartment-id:compartment-id" "jsonSimple"
 # FS-ExpSets,oci_fs_export-set.json,jsonAllAD,"fs export-set list --all"
 # FS-Exports,oci_fs_export.json,jsonAllCompartAddTag,"fs export list --all"
 # FS-FileSystems,oci_fs_file-system.json,jsonAllAD,"fs file-system list --all"
 # FS-MountTargets,oci_fs_mount-target.json,jsonAllAD,"fs mount-target list --all"
-# FS-Snapshots,oci_fs_snapshot.json,jsonGenericMaster,"fs snapshot list --all" "FS-FileSystems" "id" "file-system-id" "jsonSimple"
+# FS-Snapshots,oci_fs_snapshot.json,jsonGenericMaster,"fs snapshot list --all" "FS-FileSystems" "id:file-system-id" "jsonSimple"
 # IAM-ADs,oci_iam_availability-domain.json,jsonSimple,"iam availability-domain list"
-# IAM-AuthTokens,oci_iam_auth-token.json,jsonGenericMaster,"iam auth-token list" "IAM-Users" "id" "user-id" "jsonSimple"
+# IAM-AuthTokens,oci_iam_auth-token.json,jsonGenericMaster,"iam auth-token list" "IAM-Users" "id:user-id" "jsonSimple"
 # IAM-Comparts,oci_iam_compartment.json,jsonCompartments
-# IAM-CustSecretKeys,oci_iam_customer-secret-key.json,jsonGenericMaster,"iam customer-secret-key list" "IAM-Users" "id" "user-id" "jsonSimple"
+# IAM-CustSecretKeys,oci_iam_customer-secret-key.json,jsonGenericMaster,"iam customer-secret-key list" "IAM-Users" "id:user-id" "jsonSimple"
 # IAM-DynGroups,oci_iam_dynamic-group.json,jsonSimple,"iam dynamic-group list --all"
 # IAM-FaultDomains,oci_iam_fault-domain.json,jsonAllAD,"iam fault-domain list"
 # IAM-Groups,oci_iam_group.json,jsonSimple,"iam group list --all"
 # IAM-Policies,oci_iam_policy.json,jsonAllCompart,"iam policy list --all"
 # IAM-RegionSub,oci_iam_region-subscription.json,jsonSimple,"iam region-subscription list"
 # IAM-Regions,oci_iam_region.json,jsonSimple,"iam region list"
-# IAM-SMTPCred,oci_iam_smtp-credential.json,jsonGenericMaster,"iam smtp-credential list" "IAM-Users" "id" "user-id" "jsonSimple"
-# IAM-Tag,oci_iam_tag.json,jsonGenericMaster,"iam tag list --all" "IAM-TagNS" "id" "tag-namespace-id" "jsonSimple"
+# IAM-SMTPCred,oci_iam_smtp-credential.json,jsonGenericMaster,"iam smtp-credential list" "IAM-Users" "id:user-id" "jsonSimple"
+# IAM-Tag,oci_iam_tag.json,jsonGenericMaster,"iam tag list --all" "IAM-TagNS" "id:tag-namespace-id" "jsonSimple"
 # IAM-TagNS,oci_iam_tag-namespace.json,jsonAllCompart,"iam tag-namespace list --all"
 # IAM-Users,oci_iam_user.json,jsonSimple,"iam user list --all"
 # IAM-WorkReqs,oci_iam_work-request.json,jsonAllCompart,"iam work-request list --all"
-# Kms-KeyVersions,oci_kms_management_key-version.json,jsonGenericMaster,"kms management key-version list --all" "Kms-Keys" "id" "key-id" "jsonSimple"
+# Kms-KeyVersions,oci_kms_management_key-version.json,jsonGenericMaster,"kms management key-version list --all" "Kms-Keys" "id:key-id" "jsonSimple"
 # Kms-Keys,oci_kms_management_key.json,jsonAllCompart,"kms management key list --all"
 # Kms-Vaults,oci_kms_management_vault.json,jsonAllCompart,"kms management vault list --all"
+# LB-Backend,oci_lb_backend.json,jsonGenericMasterAdd,"lb backend list" "LB-BackendSet" "load-balancer-id:load-balancer-id:load-balancer-id:name:backend-set-name:backend-set-name" "jsonSimple"
+# LB-BackendHealth,oci_lb_backend-health.json,jsonGenericMasterAdd,"lb backend-health get" "LB-Backend" "load-balancer-id:load-balancer-id:load-balancer-id:backend-set-name:backend-set-name:backend-set-name:name:backend-name:backend-name" "jsonSimple"
+# LB-BackendSet,oci_lb_backend-set.json,jsonGenericMasterAdd,"lb backend-set list" "LB-LoadBalancers" "id:load-balancer-id:load-balancer-id" "jsonSimple"
+# LB-BackendSetHealth,oci_lb_backend-set-health.json,jsonGenericMasterAdd,"lb backend-set-health get" "LB-BackendSet" "load-balancer-id:load-balancer-id:load-balancer-id:name:backend-set-name:backend-set-name" "jsonSimple"
+# LB-Certificates,oci_lb_certificate.json,jsonGenericMasterAdd,"lb certificate list" "LB-LoadBalancers" "id:load-balancer-id:load-balancer-id" "jsonSimple"
+# LB-HealthChecker,oci_lb_health-checker.json,jsonGenericMasterAdd,"lb health-checker get" "LB-BackendSet" "load-balancer-id:load-balancer-id:load-balancer-id:name:backend-set-name:backend-set-name" "jsonSimple"
+# LB-Hostnames,oci_lb_hostname.json,jsonGenericMasterAdd,"lb hostname list" "LB-LoadBalancers" "id:load-balancer-id:load-balancer-id" "jsonSimple"
+# LB-LoadBalancerHealth,oci_lb_load-balancer-health.json,jsonGenericMasterAdd,"lb load-balancer-health get" "LB-LoadBalancers" "id:load-balancer-id:load-balancer-id" "jsonSimple"
+# LB-LoadBalancers,oci_lb_load-balancer.json,jsonAllCompart,"lb load-balancer list --all"
+# LB-PathRoutes,oci_lb_path-route-set.json,jsonGenericMasterAdd,"lb path-route-set list" "LB-LoadBalancers" "id:load-balancer-id:load-balancer-id" "jsonSimple"
+# LB-Policies,oci_lb_policy.json,jsonAllCompartAddTag,"lb policy list --all"
+# LB-Protocols,oci_lb_protocol.json,jsonAllCompartAddTag,"lb protocol list --all"
+# LB-Shapes,oci_lb_shape.json,jsonAllCompartAddTag,"lb shape list --all"
+# LB-WorkReqs,oci_lb_work-request.json,jsonGenericMasterAdd,"lb work-request list" "LB-LoadBalancers" "id:load-balancer-id:load-balancer-id" "jsonSimple"
 # Net-Cpe,oci_network_cpe.json,jsonAllCompart,"network cpe list --all"
 # Net-CrossConn,oci_network_cross-connect.json,jsonAllCompart,"network cross-connect list --all"
 # Net-CrossConnGrp,oci_network_cross-connect-group.json,jsonAllCompart,"network cross-connect-group list --all"
 # Net-CrossConnLoc,oci_network_cross-connect-location.json,jsonAllCompart,"network cross-connect-location list --all"
 # Net-CrossConnPort,oci_network_cross-connect-port-speed-shape.json,jsonAllCompart,"network cross-connect-port-speed-shape list --all"
-# Net-CrossConnStatus,oci_network_cross-connect-status.json,jsonGenericMaster,"network cross-connect-status get" "Net-CrossConn" "id" "cross-connect-id" "jsonSimple"
+# Net-CrossConnStatus,oci_network_cross-connect-status.json,jsonGenericMaster,"network cross-connect-status get" "Net-CrossConn" "id:cross-connect-id" "jsonSimple"
 # Net-DhcpOptions,oci_network_dhcp-options.json,jsonAllVCN,"network dhcp-options list --all"
 # Net-DrgAttachs,oci_network_drg-attachment.json,jsonAllCompart,"network drg-attachment list --all"
 # Net-Drgs,oci_network_drg.json,jsonAllCompart,"network drg list --all"
@@ -601,7 +627,7 @@ function jsonConcat ()
 # Net-IpSecConns,oci_network_ip-sec-connection.json,jsonAllCompart,"network ip-sec-connection list --all"
 # Net-LocalPeering,oci_network_local-peering-gateway.json,jsonAllVCN,"network local-peering-gateway list --all"
 # Net-NatGateway,oci_network_nat-gateway.json,jsonAllCompart,"network nat-gateway list --all"
-# Net-PrivateIPs,oci_network_private-ip.json,jsonGenericMaster,"network private-ip list --all" "Net-Subnets" "id" "subnet-id" "jsonSimple"
+# Net-PrivateIPs,oci_network_private-ip.json,jsonGenericMaster,"network private-ip list --all" "Net-Subnets" "id:subnet-id" "jsonSimple"
 # Net-PublicIPs,oci_network_public-ip.json,jsonPublicIPs
 # Net-RemotePeering,oci_network_remote-peering-connection.json,jsonAllCompart,"network remote-peering-connection list --all"
 # Net-RouteTables,oci_network_route-table.json,jsonAllVCN,"network route-table list --all"
@@ -611,15 +637,15 @@ function jsonConcat ()
 # Net-Subnets,oci_network_subnet.json,jsonAllVCN,"network subnet list --all"
 # Net-VCNs,oci_network_vcn.json,jsonAllCompart,"network vcn list --all"
 # Net-VirtCirc,oci_network_virtual-circuit.json,jsonAllCompart,"network virtual-circuit list --all"
-# Net-VirtCircPubPref,oci_network_virtual-circuit-public-prefix.json,jsonGenericMaster,"network virtual-circuit-public-prefix list" "Net-VirtCirc" "id" "virtual-circuit-id" "jsonSimple"
+# Net-VirtCircPubPref,oci_network_virtual-circuit-public-prefix.json,jsonGenericMaster,"network virtual-circuit-public-prefix list" "Net-VirtCirc" "id:virtual-circuit-id" "jsonSimple"
 # Net-Vnics,oci_network_vnic.json,jsonVNICs
 # OS-Buckets,oci_os_bucket.json,jsonAllCompart,"os bucket list --all"
-# OS-Multipart,oci_os_multipart.json,jsonGenericMasterAdd,"os multipart list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
+# OS-Multipart,oci_os_multipart.json,jsonGenericMasterAdd,"os multipart list --all" "OS-Buckets" "name:bucket-name:bucket-name" "jsonSimple"
 # OS-Nameserver,oci_os_ns.json,jsonSimple,"os ns get"
 # OS-NameserverMeta,oci_os_ns-metadata.json,jsonSimple,"os ns get-metadata"
-# OS-ObjLCPolicy,oci_os_object-lifecycle-policy.json,jsonGenericMaster,"os object-lifecycle-policy get" "OS-Buckets" "name" "bucket-name" "jsonSimple"
-# OS-Objects,oci_os_object.json,jsonGenericMasterAdd,"os object list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
-# OS-PreauthReqs,oci_os_preauth-request.json,jsonGenericMasterAdd,"os preauth-request list --all" "OS-Buckets" "name" "bucket-name" "jsonSimple" "bucket-name"
+# OS-ObjLCPolicy,oci_os_object-lifecycle-policy.json,jsonGenericMaster,"os object-lifecycle-policy get" "OS-Buckets" "name:bucket-name" "jsonSimple"
+# OS-Objects,oci_os_object.json,jsonGenericMasterAdd,"os object list --all" "OS-Buckets" "name:bucket-name:bucket-name" "jsonSimple"
+# OS-PreauthReqs,oci_os_preauth-request.json,jsonGenericMasterAdd,"os preauth-request list --all" "OS-Buckets" "name:bucket-name:bucket-name" "jsonSimple"
 # OS-WorkReqs,oci_os_work-request.json,jsonAllCompart,"os work-request list"
 # Search-ResTypes,oci_search_resource-type.json,jsonSimple,"search resource-type list --all"
 # Audit-Events,oci_audit_event.json,jsonAudEvents,"$1"
