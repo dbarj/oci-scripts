@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Nov/2018 by Rodrigo Jorge
-# Version 1.07
+# Version 1.08
 #************************************************************************
 set -e
 
@@ -89,7 +89,7 @@ function echoStatus ()
 function exitError ()
 {
    echoError "$1"
-   ( set -o posix ; set ) > /tmp/oci_debug.txt
+   ( set -o posix ; set ) > /tmp/oci_debug.$(date '+%Y%m%d%H%M%S').txt
    exit 1
 }
 
@@ -1139,7 +1139,7 @@ do
   ${v_oci} compute volume-attachment attach "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
   checkError "x" "$v_ret" "Could not associate target volume."
 
-  ((v_i++))
+  ((++v_i)) # ((v_i++)) will abort the script
 done
 
 ######
