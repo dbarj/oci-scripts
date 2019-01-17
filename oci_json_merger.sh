@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.02
+# Version 1.03
 #************************************************************************
 set -e
 
@@ -138,10 +138,12 @@ do
         mv "out.json" "${i}.json"
         rm -f "$((i-1)).json"
       fi
-      ((i++))
+      ((++i))
+    else
+      rm -f "${i}.json"
     fi
   done
-  ((i--))
+  ((--i))
   mv "${i}.json" "${v_json_file}"
   zip -qmT "$v_output_zip" "${v_json_file}"
 done
