@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Nov/2018 by Rodrigo Jorge
-# Version 1.08
+# Version 1.09
 #************************************************************************
 set -e
 
@@ -1046,7 +1046,7 @@ printStep
 
 v_orig_volList=()
 v_target_volList=()
-for v_target_volBackupID in $v_target_volBackupList
+for v_target_volBackupID in "${v_target_volBackupList[@]}"
 do
   setRetion "${v_target_region}"
 
@@ -1100,7 +1100,7 @@ setRetion "${v_target_region}"
 
 printStep
 
-for v_target_volBackupID in $v_target_volBackupList
+for v_target_volBackupID in "${v_target_volBackupList[@]}"
 do
   v_params=()
   v_params+=(--volume-backup-id ${v_target_volBackupID})
