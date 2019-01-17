@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.16
+# Version 1.17
 #************************************************************************
 set -e
 
@@ -30,13 +30,14 @@ v_oci="oci"
 v_jq="jq"
 
 # Add any desired oci argument. Keep default to avoid oci_cli_rc usage.
-v_oci_args="--cli-rc-file /dev/null"
+[ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
+[ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
 
 # Don't change it.
 v_min_ocicli="2.4.34"
 
 # Temporary Folder. Used to stage some repetitive jsons and save time. Empty to disable.
-v_tmpfldr="/tmp/oci"
+v_tmpfldr="$(mktemp -d -u -p /tmp/.oci 2>&- || mktemp -d -u)"
 
 [[ "${DEBUG}" == "" ]] && DEBUG=0
 
@@ -156,7 +157,7 @@ fi
 ## Test if temp folder is writable
 if [ -n "${v_tmpfldr}" ]
 then
-  mkdir "${v_tmpfldr}" 2>&- || true
+  mkdir -p "${v_tmpfldr}" 2>&- || true
 else
   echoError "Temporary folder is DISABLED. Execution will take much longer."
   echoError "Press CTRL+C in next 10 seconds if you want to exit and fix this."
