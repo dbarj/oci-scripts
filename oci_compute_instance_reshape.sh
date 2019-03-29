@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.06
+# Version 1.07
 #************************************************************************
 set -e
 
@@ -28,37 +28,56 @@ set -e
 v_oci="oci"
 v_jq="jq"
 
-# Add any desired oci argument. Keep default to avoid oci_cli_rc usage (recommended).
-v_oci_args="--cli-rc-file /dev/null"
+# Add any desired oci argument. Keep default to avoid oci_cli_rc usage.
+[ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
+[ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
+
+# Don't ask any question if SCRIPT_ASK is NO
+[ "${SCRIPT_ASK}" == "no" ] && v_skip_question=true || v_skip_question=false
 
 # Don't change it.
 v_min_ocicli="2.4.30"
 
-echoError ()
+function echoError ()
 {
-   (>&2 echo "$1")
+   (>&2 echoStatus "$1" "RED")
 }
 
-exitError ()
+function echoStatus ()
+{
+  local RED='\033[0;31m'
+  local GREEN='\033[0;32m'
+  local BOLD='\033[0;1m'
+  local NC='\033[0m' # No Color
+  local TYPE="$GREEN"
+  [ "$2" == "GREEN" ] && TYPE="$GREEN"
+  [ "$2" == "RED" ] && TYPE="$RED"
+  [ "$2" == "BOLD" ] && TYPE="$BOLD"
+  printf "${TYPE}${1}${NC}\n"
+}
+
+function exitError ()
 {
    echoError "$1"
+   ( set -o posix ; set ) > /tmp/oci_debug.$(date '+%Y%m%d%H%M%S').txt
    exit 1
 }
 
-if [ $# -ne 2 -a $# -ne 3 ]
+# trap
+trap 'exitError "Code Interrupted."' INT SIGINT SIGTERM
+
+if [ $# -ne 2 ]
 then
   echoError "$0: Two arguments are needed.. given: $#"
   echoError "- 1st param = Compute Instance Name or OCID"
   echoError "- 2nd param = Compute Instance Target Shape"
-  echoError "- 3rd param = Region (Optional)"
   exit 1
 fi
 
 v_inst_name="$1"
 v_new_shape="$2"
-v_region="$3"
 
-[ -n "$v_inst_name" ] || exitError "Intance Name or OCID can't be null."
+[ -n "$v_inst_name" ] || exitError "Instance Name or OCID can't be null."
 [ -n "$v_new_shape" ] || exitError "Shape can't be null."
 
 if ! $(which ${v_oci} >&- 2>&-)
@@ -84,7 +103,6 @@ fi
 
 v_ocicli_timeout=3600
 
-[ -n "${v_region}" ] && v_oci_args="${v_oci_args} --region ${v_region}"
 [ -z "${v_oci_args}" ] || v_oci="${v_oci} ${v_oci_args}"
 
 v_test=$(${v_oci} iam compartment list --all 2>&1) && ret=$? || ret=$?
@@ -149,7 +167,14 @@ v_shapecheck=$(${v_oci} compute shape list ${v_compartment_arg} --all --availabi
 
 v_instanceShape=$(echo "$v_jsoninst" | ${v_jq} -rc '."shape"')
 [ -n "$v_instanceShape" ] || exitError "Could not get Instance Shape."
-[ "$v_instanceShape" != "$v_new_shape" ] || exitError "Source and Target shapes are the same."
+if [ "$v_instanceShape" == "$v_new_shape" ]
+then
+  echoError "Source and Target shapes are the same."
+  exit 0
+fi
+
+grep -q '.Dense' <<< "$v_instanceShape" && exitError "Dense IO shapes resize is not available."
+grep -q '.Dense' <<< "$v_new_shape" && exitError "Dense IO shapes resize is not available."
 
 v_instancePriVnicIP=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."private-ip"')
 [ -n "$v_instancePriVnicIP" ] || exitError "Could not get Instance Primary Private IP Address."
@@ -165,53 +190,53 @@ echo "Machine will be moved from \"$v_instanceShape\" to \"$v_new_shape\"."
 v_extra_vnic_params=""
 # --defined-tags
 v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."defined-tags"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_vnic_params="${v_extra_vnic_params}--defined-tags '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_vnic_params+="--defined-tags '$v_out' \\"$'\n'
 # --freeform-tags
 v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."freeform-tags"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_vnic_params="${v_extra_vnic_params}--freeform-tags '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_vnic_params+="--freeform-tags '$v_out' \\"$'\n'
 
 v_extra_inst_params=""
 # --vnic-display-name
 v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."display-name"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--vnic-display-name '$v_out' \\"$'\n'
+[ -z "$v_out" ] || v_extra_inst_params+="--vnic-display-name '$v_out' \\"$'\n'
 # --hostname-label
-v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."hostname-label"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--hostname-label '$v_out' \\"$'\n'
+v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."hostname-label" // empty' | sed "s/'/'\\\''/g")
+[ -z "$v_out" ] || v_extra_inst_params+="--hostname-label '$v_out' \\"$'\n'
 # --skip-source-dest-check
 v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."skip-source-dest-check"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--skip-source-dest-check '$v_out' \\"$'\n'
+[ -z "$v_out" ] || v_extra_inst_params+="--skip-source-dest-check '$v_out' \\"$'\n'
 # --assign-public-ip
 v_out=$(echo "$v_jsonprivnic" | ${v_jq} -rc '."public-ip" // empty' | sed "s/'/'\\\''/g")
 if [ -n "$v_out" ]
 then
   if grep -q -F -x "$v_out" <(echo "$v_reservedpubsip")
   then
-    v_extra_inst_params="${v_extra_inst_params}--assign-public-ip false \\"$'\n'
+    v_extra_inst_params+="--assign-public-ip false \\"$'\n'
   else
-    v_extra_inst_params="${v_extra_inst_params}--assign-public-ip true \\"$'\n'
+    v_extra_inst_params+="--assign-public-ip true \\"$'\n'
   fi
 else
-  v_extra_inst_params="${v_extra_inst_params}--assign-public-ip false \\"$'\n'
+  v_extra_inst_params+="--assign-public-ip false \\"$'\n'
 fi
 v_instancePriVnicPubIP="$v_out"
 # --defined-tags
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."defined-tags"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params="${v_extra_inst_params}--defined-tags '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params+="--defined-tags '$v_out' \\"$'\n'
 # --freeform-tags
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."freeform-tags"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params="${v_extra_inst_params}--freeform-tags '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params+="--freeform-tags '$v_out' \\"$'\n'
 # --metadata
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."metadata"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params="${v_extra_inst_params}--metadata '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params+="--metadata '$v_out' \\"$'\n'
 # --extended-metadata
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."extended-metadata"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params="${v_extra_inst_params}--extended-metadata '$v_out' \\"$'\n'
+[ -z "$v_out" -o "$v_out" == "{}" ] || v_extra_inst_params+="--extended-metadata '$v_out' \\"$'\n'
 # --fault-domain
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."fault-domain"' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--fault-domain '$v_out' \\"$'\n'
+[ -z "$v_out" ] || v_extra_inst_params+="--fault-domain '$v_out' \\"$'\n'
 # --ipxe-script-file
 v_out=$(echo "$v_jsoninst" | ${v_jq} -rc '."ipxe-script" // empty' | sed "s/'/'\\\''/g")
-[ -z "$v_out" ] || v_extra_inst_params="${v_extra_inst_params}--ipxe-script-file '$v_out' \\"$'\n'
+[ -z "$v_out" ] || v_extra_inst_params+="--ipxe-script-file '$v_out' \\"$'\n'
 
 ## List Vols
 
@@ -224,54 +249,60 @@ if [ $ret -ne 0 ]
 then
   exitError "Could not create execution folder. Check if previous run is incompleted or files permissions."
 fi
-[ -f ${v_instanceID}/inst.json  ] || echo "$v_jsoninst"  > ${v_instanceID}/inst.json
-[ -f ${v_instanceID}/vnics.json ] || echo "$v_jsonvnics" > ${v_instanceID}/vnics.json
-[ -f ${v_instanceID}/vols.json  ] || echo "$f_jsonvols"  > ${v_instanceID}/vols.json
+[ -f ${v_instanceID}/inst.json  ]  || echo "$v_jsoninst"   > ${v_instanceID}/inst.json
+[ -f ${v_instanceID}/vnics.json ]  || echo "$v_jsonvnics"  > ${v_instanceID}/vnics.json
+[ -f ${v_instanceID}/vols.json  ]  || echo "$f_jsonvols"   > ${v_instanceID}/vols.json
 
 v_runall=${v_instanceID}/runall.sh
 
 ## Stop Machine
 
+v_params=""
+v_params+="--instance-id '${v_instanceID}' \\"$'\n'
+v_params+="--action SOFTSTOP \\"$'\n'
+v_params+="--wait-for-state STOPPED \\"$'\n'
+v_params+="--max-wait-seconds $v_ocicli_timeout \\"$'\n'
+
 cat >> "$v_runall" <<EOF
 cd "${v_instanceID}"
 # Stop Instance
 ${v_oci} compute instance action \\
---instance-id '${v_instanceID}' \\
---action SOFTSTOP \\
---wait-for-state STOPPED \\
---max-wait-seconds $v_ocicli_timeout \\
->> runall.log
+${v_params}>> runall.log
 ret=\$?
 EOF
 
 ## Drop Machine
 
+v_params=""
+v_params+="--force \\"$'\n'
+v_params+="--instance-id '${v_instanceID}' \\"$'\n'
+v_params+="--wait-for-state TERMINATED \\"$'\n'
+v_params+="--preserve-boot-volume true \\"$'\n'
+v_params+="--max-wait-seconds $v_ocicli_timeout \\"$'\n'
+
 cat >> "$v_runall" <<EOF
 # Terminate Instance
 ${v_oci} compute instance terminate \\
---force \\
---instance-id '${v_instanceID}' \\
---wait-for-state TERMINATED \\
---preserve-boot-volume true \\
---max-wait-seconds $v_ocicli_timeout \\
->> runall.log
+${v_params}>> runall.log
 ret=\$?
 EOF
 
 ## Create New Machine
 
+v_params=""
+v_params+="--availability-domain '${v_instanceAD}' \\"$'\n'
+v_params+="--shape '${v_new_shape}' \\"$'\n'
+v_params+="--display-name '${v_inst_name}' \\"$'\n'
+v_params+="--source-boot-volume-id '${v_instanceBVID}' \\"$'\n'
+v_params+="--subnet-id '${v_instancePriVnicSubnetID}' \\"$'\n'
+v_params+="--private-ip '${v_instancePriVnicIP}' \\"$'\n'
+v_params+="--wait-for-state RUNNING \\"$'\n'
+v_params+="--max-wait-seconds $v_ocicli_timeout \\"$'\n'
+
 cat >> "$v_runall" <<EOF
 # Create Instance
 ${v_oci} compute instance launch ${v_compartment_arg} \\
---availability-domain '${v_instanceAD}' \\
---shape '${v_new_shape}' \\
---display-name '${v_inst_name}' \\
---source-boot-volume-id '${v_instanceBVID}' \\
---subnet-id '${v_instancePriVnicSubnetID}' \\
---private-ip '${v_instancePriVnicIP}' \\
---wait-for-state RUNNING \\
---max-wait-seconds $v_ocicli_timeout \\
-${v_extra_inst_params}>> instance.log
+${v_params}${v_extra_inst_params}>> instance.log
 ret=\$?
 cat instance.log >> runall.log
 EOF
@@ -332,31 +363,31 @@ do
   v_6=$(echo "$v_jsonsecvnic" | ${v_jq} -rc 'select (."id" == "'${v_instvnics}'") | ."public-ip" // empty' | sed "s/'/'\\\''/g")
   v_7=$(echo "$v_jsonsecvnic" | ${v_jq} -rc 'select (."id" == "'${v_instvnics}'") | ."skip-source-dest-check"' | sed "s/'/'\\\''/g")
   v_8=$(echo "$v_jsonsecvnic" | ${v_jq} -rc 'select (."id" == "'${v_instvnics}'") | ."defined-tags"' | sed "s/'/'\\\''/g")
-  v_extra_vnic_params=""
-  [ -z "$v_1" ] || v_extra_vnic_params="${v_extra_vnic_params}--subnet-id '$v_1' \\"$'\n'
-  [ -z "$v_2" ] || v_extra_vnic_params="${v_extra_vnic_params}--vnic-display-name '$v_2' \\"$'\n'
-  [ -z "$v_3" ] || v_extra_vnic_params="${v_extra_vnic_params}--freeform-tags '$v_3' \\"$'\n'
-  [ -z "$v_4" ] || v_extra_vnic_params="${v_extra_vnic_params}--hostname-label '$v_4' \\"$'\n'
-  [ -z "$v_5" ] || v_extra_vnic_params="${v_extra_vnic_params}--private-ip '$v_5' \\"$'\n'
+  v_params=""
+  v_params+="--instance-id \${v_newInstanceID} \\"$'\n'
+  [ -n "$v_1" ] && v_params+="--subnet-id '$v_1' \\"$'\n'
+  [ -n "$v_2" ] && v_params+="--vnic-display-name '$v_2' \\"$'\n'
+  [ -n "$v_3" -a "$v_3" != '{}' ] && v_params+="--freeform-tags '$v_3' \\"$'\n'
+  [ -n "$v_4" ] && v_params+="--hostname-label '$v_4' \\"$'\n'
+  [ -n "$v_5" ] && v_params+="--private-ip '$v_5' \\"$'\n'
   if [ -n "$v_6" ]
   then
     if grep -q -F -x "$v_6" <(echo "$v_reservedpubsip")
     then
-      v_extra_vnic_params="${v_extra_vnic_params}--assign-public-ip false \\"$'\n'
+      v_params+="--assign-public-ip false \\"$'\n'
     else
-      v_extra_vnic_params="${v_extra_vnic_params}--assign-public-ip true \\"$'\n'
+      v_params+="--assign-public-ip true \\"$'\n'
     fi
   else
-    v_extra_vnic_params="${v_extra_vnic_params}--assign-public-ip false \\"$'\n'
+    v_params+="--assign-public-ip false \\"$'\n'
   fi
-  [ -z "$v_7" ] || v_extra_vnic_params="${v_extra_vnic_params}--skip-source-dest-check '$v_7' \\"$'\n'
-  [ -z "$v_8" ] || v_extra_vnic_params="${v_extra_vnic_params}--defined-tags '$v_8' \\"$'\n'
+  [ -n "$v_7" ] && v_params+="--skip-source-dest-check '$v_7' \\"$'\n'
+  [ -n "$v_8" -a "$v_8" != '{}' ] && v_params+="--defined-tags '$v_8' \\"$'\n'
+  v_params+="--wait \\"$'\n'
   cat >> "$v_runall" <<EOF
-# Add VNIC
+# Add Sec VNIC
 ${v_oci} compute instance attach-vnic \\
---instance-id "\${v_newInstanceID}" \\
---wait \\
-${v_extra_vnic_params}>> runall.log
+${v_params}>> runall.log
 ret=\$?
 EOF
   if [ -n "$v_6" ]
@@ -377,6 +408,56 @@ ret=\$?
 EOF
     fi
   fi
+done
+
+## Create Aditional IPs in VNICs
+
+f_instvnics=$(echo "$v_jsonvnics" | ${v_jq} -rc '."id"')
+for v_instvnics in $f_instvnics
+do
+  v_pipjson=$(${v_oci} network private-ip list --vnic-id ${v_instvnics} | ${v_jq} -rc '.data[]')
+  f_pipids=$(echo "$v_pipjson" | ${v_jq} -rc 'select(."is-primary" == false) |."id"')
+  for v_pipid in $f_pipids
+  do
+    v_1=$(echo "$v_pipjson" | ${v_jq} -rc 'select (."id" == "'${v_pipid}'") | ."display-name"' | sed "s/'/'\\\''/g")
+    v_2=$(echo "$v_pipjson" | ${v_jq} -rc 'select (."id" == "'${v_pipid}'") | ."hostname-label" // empty' | sed "s/'/'\\\''/g")
+    v_3=$(echo "$v_pipjson" | ${v_jq} -rc 'select (."id" == "'${v_pipid}'") | ."ip-address"' | sed "s/'/'\\\''/g")
+    v_4=$(echo "$v_pipjson" | ${v_jq} -rc 'select (."id" == "'${v_pipid}'") | ."freeform-tags"' | sed "s/'/'\\\''/g")
+    v_5=$(echo "$v_pipjson" | ${v_jq} -rc 'select (."id" == "'${v_pipid}'") | ."defined-tags"' | sed "s/'/'\\\''/g")
+    v_6=$(echo "$v_pipjson" | ${v_jq} -rc 'select (."id" == "'${v_pipid}'") | ."subnet-id"' | sed "s/'/'\\\''/g")
+
+    v_params=""
+    v_params+="--vnic-id \$v_vnicID \\"$'\n'
+    [ -n "$v_1" ] && v_params+="--display-name '$v_1' \\"$'\n'
+    [ -n "$v_2" ] && v_params+="--hostname-label '$v_2' \\"$'\n'
+    [ -n "$v_3" ] && v_params+="--ip-address '$v_3' \\"$'\n'
+    [ -n "$v_4" -a "$v_4" != "{}" ] && v_params+="--freeform-tags '$v_4' \\"$'\n'
+    [ -n "$v_5" -a "$v_5" != "{}" ] && v_params+="--defined-tags '$v_5' \\"$'\n'
+
+    v_vnicMainIP=$(echo "$v_jsonvnics" | ${v_jq} -rc 'select(."id"=="'${v_instvnics}'") | ."private-ip"')
+
+    cat >> "$v_runall" <<EOF
+v_vnicID=\$(${v_oci} compute instance list-vnics --all --instance-id "\${v_newInstanceID}" | ${v_jq} -rc '.data[] | select (."private-ip" == "${v_vnicMainIP}") | ."id"')
+# Add Secondary IPs
+${v_oci} network vnic assign-private-ip \\
+${v_params}>> runall.log
+ret=\$?
+EOF
+
+    v_publicipid=$(echo "$v_jsonpubsip" | ${v_jq} -rc 'select(."assigned-entity-id" == "'$v_pipid'") | ."id"')
+    [ -n "$v_publicipid" ] && cat >> "$v_runall" <<EOF
+# Secondary IPs assign Public IP
+v_privateipid=\$(${v_oci} network private-ip list --all --ip-address "$v_3" --subnet-id "$v_6" | ${v_jq} -rc '.data[]."id"')
+${v_oci} network public-ip update \\
+--public-ip-id '${v_publicipid}' \\
+--private-ip-id "\${v_privateipid}" \\
+--wait-for-state ASSIGNED \\
+--max-wait-seconds $v_ocicli_timeout \\
+>> runall.log
+ret=\$?
+EOF
+
+  done
 done
 
 ## Attach Vols
@@ -405,15 +486,22 @@ done
 ## List Steps
 
 echo "Following steps will be executed:"
-echo "- Instance \"${v_inst_name}\"(${v_instanceID}) will be stopped."
-echo "- Instance \"${v_inst_name}\"(${v_instanceID}) will be terminated."
-echo "- New instance \"${v_inst_name}\" will be created with same boot volume and attributes (new OCID generated)."
-[ -z "$v_extra_vnic_params" ] || echo "- Primary VNIC on new instance \"${v_inst_name}\" will be updated."
-[ -z "$v_jsonsecvnic" ] || echo "- Secondary VNICs will be reattach."
-[ -z "$f_jsonvols" ]    || echo "- Block Volumes will be reattach."
+echoStatus "- Instance \"${v_inst_name}\"(${v_instanceID}) will be stopped."
+echoStatus "- Instance \"${v_inst_name}\"(${v_instanceID}) will be terminated."
+echoStatus "- New instance \"${v_inst_name}\" will be created with same boot volume and attributes (new OCID generated)."
+[ -n "$v_extra_vnic_params" ] && echoStatus "- Primary VNIC on new instance \"${v_inst_name}\" will be updated."
+[ -n "$v_jsonsecvnic" ] && echoStatus "- Secondary VNICs will be reattach."
+[ -n "$f_pipids" ]      && echoStatus "- Secondary IPs will be asigned."
+[ -n "$f_jsonvols" ]    && echoStatus "- Block Volumes will be reattach."
 echo "Execution script created at \"$v_runall\" file."
-echo -n "Type \"YES\" to execute it and apply the changes: "
-read v_input
+
+if [ ${v_skip_question} ]
+then
+  v_input="YES"
+else
+  echo -n "Type \"YES\" to execute it and apply the changes: "
+  read v_input
+fi
 [ "$v_input" == "YES" ] || exitError "Script aborted."
 
 ## Public IP Notice
@@ -424,10 +512,15 @@ then
   v_ephemeralips=$(comm -2 -3 <(sort <(echo "$v_out")) <(sort <(echo "$v_reservedpubsip")))
   if [ -n "$v_ephemeralips" ]
   then
-    echo "This instance has some VNICs with Ephemeral Public IPs assigned: $(echo "$v_ephemeralips" | tr "\n" "," | sed 's/,$//')."
-    echo "Note that recreating the Machine will reassign a different Public IP."
-    echo -n "Type \"YES\" to continue: "
-    read v_input
+    echoStatus "This instance has some VNICs with Ephemeral Public IPs assigned: $(echo "$v_ephemeralips" | tr "\n" "," | sed 's/,$//')." "RED"
+    echoStatus "Note that recreating the Machine will reassign a different Public IP." "RED"
+    if [ ${v_skip_question} ]
+    then
+      v_input="YES"
+    else
+      echo -n "Type \"YES\" to continue: "
+      read v_input
+    fi
     [ "$v_input" == "YES" ] || exitError "Script aborted."
   fi
 fi
@@ -475,10 +568,16 @@ then
   echo "set +x" >> "$tempshell"
   echo "#### BEGIN - NEW DISKS IPS DISCOVERY ####"
   cat "$tempshell"
+  echo "sudo reboot"
   echo "####  END  - NEW DISKS IPS DISCOVERY ####"
 
-  echo -n "Script above must be executed in target machine. Type \"YES\" to apply the changes via SSH: "
-  read v_input
+  if [ ${v_skip_question} ]
+  then
+    v_input="YES"
+  else
+    echo -n "Script above must be executed in target machine. Type \"YES\" to apply the changes via SSH: "
+    read v_input
+  fi
   if [ "$v_input" == "YES" ]
   then
     ## Wait SSH UP
