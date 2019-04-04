@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Nov/2018 by Rodrigo Jorge
-# Version 1.09
+# Version 1.10
 #************************************************************************
 set -e
 
@@ -1000,7 +1000,21 @@ do
     v_params+=(--volume-backup-id ${v_orig_VGBackupVolID})
     v_params+=(--destination-region "${v_target_region}")
 
+    setRetion "${v_target_region}"
+
+    ## Check if there is any copy currently going on..
+    while true
+    do
+      v_target_volBackupJson=$(${v_oci} bv backup list ${v_target_compArg} --all) && v_ret=$? || v_ret=$?
+      checkError "$v_target_volBackupJson" "$v_ret" "Could not get Target Backup status."
+      v_target_bkpVolStatus=$(echo "$v_target_volBackupJson" | ${v_jq} -rc '.data[] | select(."lifecycle-state"=="CREATING" and ."source-volume-backup-id"!=null) | ."lifecycle-state"' | sort -u)
+      [ -z "${v_target_bkpVolStatus}" ] && break
+      echo "There are backups with status ${v_target_bkpVolStatus} in target. Please wait."
+      sleep 180
+    done
+
     setRetion "${v_orig_region}"
+
     v_target_volBackupJson=$(${v_oci} bv backup copy "${v_params[@]}") && v_ret=$? || v_ret=$?
     checkError "$v_target_volBackupJson" "$v_ret" "Could not copy the backup to target region."
 
@@ -1105,7 +1119,7 @@ do
   v_params=()
   v_params+=(--volume-backup-id ${v_target_volBackupID})
   v_params+=(--force)
-  v_params+=(--wait-for-state AVAILABLE)
+  v_params+=(--wait-for-state TERMINATED)
   v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
   ${v_oci} bv backup delete "${v_params[@]}" && v_ret=$? || v_ret=$?
