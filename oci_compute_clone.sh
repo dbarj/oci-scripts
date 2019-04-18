@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Oct/2018 by Rodrigo Jorge
-# Version 1.03
+# Version 1.04
 #************************************************************************
 set -e
 
@@ -28,8 +28,9 @@ set -e
 v_oci="oci"
 v_jq="jq"
 
-# Add any desired oci argument. Keep default to avoid oci_cli_rc usage (recommended).
-v_oci_args="--cli-rc-file /dev/null"
+# Add any desired oci argument. Keep default to avoid oci_cli_rc usage.
+[ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
+[ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
 
 # Don't change it.
 v_min_ocicli="2.4.30"
@@ -66,7 +67,7 @@ function echoError ()
 function exitError ()
 {
    echoError "$1"
-   ( set -o posix ; set ) > /tmp/oci_debug.txt
+   ( set -o posix ; set ) > /tmp/oci_debug.$(date '+%Y%m%d%H%M%S').txt
    exit 1
 }
 
@@ -421,8 +422,11 @@ v_target_compID=$(echo "${v_target_subnetJson}" |  ${v_jq} -rc '."compartment-id
 [ $v_ret -eq 0 -a -n "$v_target_compID" ] || exitError "Could not get the target Compartment ID."
 v_target_compArg="--compartment-id ${v_target_compID}"
 
-v_target_AD=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."availability-domain"') && v_ret=$? || v_ret=$?
-[ $v_ret -eq 0 -a -n "${v_target_AD}" ] || exitError "Can't find Target AD."
+v_target_AD=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."availability-domain" // empty') && v_ret=$? || v_ret=$?
+[ $v_ret -eq 0 ] || exitError "Can't find Target AD."
+
+# For "Regional Subnets"
+[ -n "${v_target_AD}" ] || v_target_AD="${v_orig_AD}"
 
 v_target_allowPub=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."prohibit-public-ip-on-vnic"') && v_ret=$? || v_ret=$?
 [ $v_ret -eq 0 -a -n "${v_target_allowPub}" ] || exitError "Can't get target IP allowance."
