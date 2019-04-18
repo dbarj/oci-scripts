@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -e
 
@@ -341,7 +341,7 @@ do
 
   getNextIP
 
-  echoStatus "Total IPs to burn: $(echo "${v_ips2Burn}" | wc -l)"
+  echoStatus "Total IPs to burn: $v_ips2Burn_Tot"
   
   v_params=()
   v_params+=(--availability-domain ${v_subnetAD})
@@ -356,7 +356,7 @@ do
   v_params+=(--private-ip ${v_ip})
   
   echoStatus "Creating Dummy instance to hold your IPs."
-  echoStatus "This instace is able to hold up to $((v_subs*v_max_ip_per_subnet)) IPs."
+  echoStatus "This instance is able to hold up to $((v_subs*v_max_ip_per_subnet)) IPs."
   v_compJson=$(${v_oci} compute instance launch "${v_params[@]}") && v_ret=$? || v_ret=$?
   checkError "$v_compJson" "$v_ret" "Unable to create compute."
   
