@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -e
 
@@ -47,8 +47,8 @@ set -e
 #### INTERNAL
 [ -n "${OCI_CLONE_SOURCE_REGION}" ]   && v_source_region="${OCI_CLONE_SOURCE_REGION}"
 [ -n "${OCI_CLONE_TARGET_REGION}" ]   && v_target_region="${OCI_CLONE_TARGET_REGION}"
-[ -n "${OCI_CLONE_SEDREP_VCN_NAME}" ] && v_target_vcn_name_sedrep_rule="${OCI_CLONE_SEDREP_VCN_NAME}"
 [ -n "${OCI_CLONE_SEDREP_SEC_NAME}" ] && v_target_sl_name_sedrep_rule="${OCI_CLONE_SEDREP_SEC_NAME}"
+[ -n "${OCI_CLONE_SEDREP_VCN_NAME}" ] && v_target_vcn_name_sedrep_rule="${OCI_CLONE_SEDREP_VCN_NAME}"
 [ -n "${OCI_CLONE_SEDREP_RULES}" ]    && v_target_sl_rules_sedrep_rule="${OCI_CLONE_SEDREP_RULES}"
 ####
 
@@ -87,13 +87,13 @@ function exitError ()
   exit 1
 }
 
-if [ $# -ne 2 -a $# -ne 3 -a $# -ne 4 ]
+if [ $# -lt 1 -o $# -gt 4 ]
 then
-  echoError "$0: Two arguments are needed.. given: $#"
-  echoError "- 1st param = Source Security List Name or OCID"
-  echoError "- 2nd param = Source VCN Name or OCID. Optional if first parameter is OCID, not a name."
-  echoError "- 3rd param = Target Security List Name or OCID (Optional). If not provided, same name or internal transformation will be applied."
-  echoError "- 4th param = Target VCN Name or OCID (Optional). If not provided, same name or internal transformation will be applied."
+  echoStatus "At least 1 argument is needed.. given: $#"
+  echoStatus "- 1st param = Source Security List Name or OCID"
+  echoStatus "- 2nd param = Source VCN Name or OCID. Optional if first parameter is OCID, not a name."
+  echoStatus "- 3rd param = Target Security List Name or OCID (Optional). If not provided, same name or internal transformation will be applied."
+  echoStatus "- 4th param = Target VCN Name or OCID (Optional). If not provided, same name or internal transformation will be applied."
   exit 1
 fi
 
@@ -105,7 +105,8 @@ v_vcn_name_target="$4"
 [ -n "$v_sl_name_source" ] || exitError "Source Security List Name or OCID can't be null."
 
 [ "${v_sl_name_source:0:22}" != "ocid1.securitylist.oc1" -a -z "$v_vcn_name_source" ] && exitError "Source VCN Name or OCID can't be null when source SL OCID is not provided."
-[ "${v_sl_name_target:0:22}" != "ocid1.securitylist.oc1" -a -z "${v_vcn_name_target}" -a -z "${v_vcn_name_source}" ] && exitError "Source VCN Name or OCID can't be null when both target SL and target VCN are not provided."
+#[ "${v_sl_name_target:0:22}" != "ocid1.securitylist.oc1" -a -z "${v_vcn_name_target}" -a -z "${v_vcn_name_source}" ] && exitError "Source VCN Name or OCID can't be null when both target SL and target VCN are not provided."
+[ -z "${v_sl_name_target}" -a -z "${v_vcn_name_target}" -a "${v_source_region}" == "${v_target_region}" -a -z "${v_target_sl_name_sedrep_rule}" -a -z "${v_target_vcn_name_sedrep_rule}" ] && exitError "Source and Target are the same."
 
 if ! $(which ${v_oci} >&- 2>&-)
 then
@@ -153,6 +154,7 @@ fi
 
 function getVCN ()
 {
+  v_vcnID=""
   v_vcn_name="$1"
   local v_vcn_region="$2"
   if [ "${v_vcn_name:0:13}" == "ocid1.vcn.oc1" ]
@@ -213,6 +215,26 @@ function getSL ()
   fi
 }
 
+function getSourceSL ()
+{
+  getSL "${v_sl_name_source}" "source" "$v_vcnID_source" "$v_compartment_id_source"
+  v_sl_name_source="$v_sl_name"
+  v_slID_source="$v_slID"
+  v_jsonSL_source="$v_jsonSL"
+  v_vcnID_source=$(echo "$v_jsonSL_source" | ${v_jq} -rc '."vcn-id"') && ret=$? || ret=$?
+  [ $ret -eq 0 -a -n "$v_vcnID_source" ] || exitError "Could not get the VCN ID in source region."
+}
+
+function getTargetSL ()
+{
+  getSL "${v_sl_name_target}" "target" "$v_vcnID_target" "$v_compartment_id_target"
+  v_sl_name_target="$v_sl_name"
+  v_slID_target="$v_slID"
+  v_jsonSL_target="$v_jsonSL"
+  v_vcnID_target=$(echo "$v_jsonSL_target" | ${v_jq} -rc '."vcn-id"') && ret=$? || ret=$?
+  [ $ret -eq 0 -a -n "$v_vcnID_target" ] || exitError "Could not get the VCN ID in target region."
+}
+
 function getSourceVCN ()
 {
   getVCN "${v_vcn_name_source}" "source"
@@ -243,18 +265,16 @@ if [ "${v_sl_name_source:0:22}" != "ocid1.securitylist.oc1" ]
 then
   # If OCID of SL is not defined, will need to get VCN info
   getSourceVCN
-elif [ "${v_sl_name_target:0:22}" != "ocid1.securitylist.oc1" -a -z "${v_vcn_name_target}" -a \( "${v_vcn_name_source:0:13}" == "ocid1.vcn.oc1" -o -z "${v_vcn_name_source}" \) ]
-then
-  # Will also need the source VCN info (basically the name) if target VCN is empty, as transformation will be required.
-  getSourceVCN
-else
-  echoStatus "Skipped source VCN info gather as source SL OCID was provided."
 fi
 
-getSL "${v_sl_name_source}" "source" "$v_vcnID_source" "$v_compartment_id_source"
-v_sl_name_source="$v_sl_name"
-v_slID_source="$v_slID"
-v_jsonSL_source="$v_jsonSL"
+getSourceSL
+
+if [ "${v_sl_name_target:0:22}" != "ocid1.securitylist.oc1" -a -z "${v_vcn_name_target}" -a \( "${v_vcn_name_source:0:13}" == "ocid1.vcn.oc1" -o -z "${v_vcn_name_source}" \) ]
+then
+  # Will also need the source VCN info (basically the name) if target VCN is empty, as transformation will be required.
+  v_vcn_name_source="${v_vcnID_source}"
+  getSourceVCN
+fi
 
 ## Check Target
 
@@ -270,8 +290,6 @@ then
   fi
   # If OCID of SL is not defined, will need to get VCN info
   getTargetVCN
-else
-  echoStatus "Skipped target VCN info gather as target SL OCID was provided."
 fi
 
 if [ -z "${v_sl_name_target}" ]
@@ -281,10 +299,7 @@ then
   echoStatus "Target SL will be ${v_sl_name_target}"
 fi
 
-getSL "${v_sl_name_target}" "target" "$v_vcnID_target" "$v_compartment_id_target"
-v_sl_name_target="$v_sl_name"
-v_slID_target="$v_slID"
-v_jsonSL_target="$v_jsonSL"
+getTargetSL
 
 # Security Check
 [ "${v_slID_source}" == "${v_slID_target}" ] && exitError "Source and Target are the same."
