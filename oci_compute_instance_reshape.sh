@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.07
+# Version 1.08
 #************************************************************************
 set -e
 
@@ -80,14 +80,14 @@ v_new_shape="$2"
 [ -n "$v_inst_name" ] || exitError "Instance Name or OCID can't be null."
 [ -n "$v_new_shape" ] || exitError "Shape can't be null."
 
-if ! $(which ${v_oci} >&- 2>&-)
+if ! $(which ${v_oci} >/dev/null 2>&-)
 then
   echoError "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
   echoError "Dowload page: https://github.com/oracle/oci-cli"
   exit 1
 fi
 
-if ! $(which ${v_jq} >&- 2>&-)
+if ! $(which ${v_jq} >/dev/null 2>&-)
 then
   echoError "Could not find jq binary. Please adapt the path in the script if not in \$PATH."
   echoError "Download page: https://github.com/stedolan/jq/releases"
@@ -169,7 +169,7 @@ v_instanceShape=$(echo "$v_jsoninst" | ${v_jq} -rc '."shape"')
 [ -n "$v_instanceShape" ] || exitError "Could not get Instance Shape."
 if [ "$v_instanceShape" == "$v_new_shape" ]
 then
-  echoError "Source and Target shapes are the same."
+  echoStatus "Source and Target shapes are the same."
   exit 0
 fi
 
@@ -244,16 +244,18 @@ f_jsonvols=$(${v_oci} compute volume-attachment list ${v_compartment_arg} --all 
 
 ## Save Files - Just for backup.
 
-mkdir ${v_instanceID} && ret=$? || ret=$?
+[ -n "${OCI_TMP_DIR}" ] && v_tmp_dir="${OCI_TMP_DIR}/${v_instanceID}" || v_tmp_dir="./${v_instanceID}"
+
+mkdir ${v_tmp_dir} && ret=$? || ret=$?
 if [ $ret -ne 0 ]
 then
   exitError "Could not create execution folder. Check if previous run is incompleted or files permissions."
 fi
-[ -f ${v_instanceID}/inst.json  ]  || echo "$v_jsoninst"   > ${v_instanceID}/inst.json
-[ -f ${v_instanceID}/vnics.json ]  || echo "$v_jsonvnics"  > ${v_instanceID}/vnics.json
-[ -f ${v_instanceID}/vols.json  ]  || echo "$f_jsonvols"   > ${v_instanceID}/vols.json
+[ -f ${v_tmp_dir}/inst.json  ]  || echo "$v_jsoninst"   > ${v_tmp_dir}/inst.json
+[ -f ${v_tmp_dir}/vnics.json ]  || echo "$v_jsonvnics"  > ${v_tmp_dir}/vnics.json
+[ -f ${v_tmp_dir}/vols.json  ]  || echo "$f_jsonvols"   > ${v_tmp_dir}/vols.json
 
-v_runall=${v_instanceID}/runall.sh
+v_runall=${v_tmp_dir}/runall.sh
 
 ## Stop Machine
 
@@ -264,7 +266,7 @@ v_params+="--wait-for-state STOPPED \\"$'\n'
 v_params+="--max-wait-seconds $v_ocicli_timeout \\"$'\n'
 
 cat >> "$v_runall" <<EOF
-cd "${v_instanceID}"
+cd "${v_tmp_dir}"
 # Stop Instance
 ${v_oci} compute instance action \\
 ${v_params}>> runall.log
@@ -536,7 +538,7 @@ echo "MACHINE RECREATED SUCCESSFULLY"
 
 ## ISCSI Vols
 
-[ -z "$f_jsonvols" ] || tempshell=${v_instanceID}/tempshell.sh
+[ -z "$f_jsonvols" ] || tempshell=${v_tmp_dir}/tempshell.sh
 [ -z "$f_jsonvols" ] || echo "set -x" > "$tempshell"
 
 for v_instvols in $f_instvols
@@ -582,14 +584,17 @@ then
   then
     ## Wait SSH UP
     echo 'Checking Server availability..'
-    v_total=40
+    v_total=20
     v_loop=1
     while [ ${v_loop} -le ${v_total} ]
     do
       timeout 5 bash -c "true &>/dev/null </dev/tcp/$v_instancePriVnicIP/22" && ret=$? || ret=$?
-      [ $ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep 5
-      [ $ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep 10
+      [ $ret -eq 0 ] && echo 'Server Available!' && break
+      echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}."
+      ((v_loop++))
+      sleep 30
     done
+    [ $ret -ne 0 ] && exitError "Server Unreachable"
 
     ## Update Attachments
     ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no opc@${v_instancePriVnicIP} "bash -s" < "$tempshell"
@@ -602,7 +607,7 @@ then
     --instance-id "${v_newInstanceID}" \
     --action SOFTRESET \
     --wait-for-state RUNNING \
-    --max-wait-seconds $v_ocicli_timeout > ${v_instanceID}/tempshell.log
+    --max-wait-seconds $v_ocicli_timeout > ${v_tmp_dir}/tempshell.log
     set +x
 
   fi
