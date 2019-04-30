@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.08
+# Version 1.09
 #************************************************************************
 set -e
 
@@ -497,7 +497,7 @@ echoStatus "- New instance \"${v_inst_name}\" will be created with same boot vol
 [ -n "$f_jsonvols" ]    && echoStatus "- Block Volumes will be reattach."
 echo "Execution script created at \"$v_runall\" file."
 
-if [ ${v_skip_question} ]
+if ${v_skip_question}
 then
   v_input="YES"
 else
@@ -516,7 +516,7 @@ then
   then
     echoStatus "This instance has some VNICs with Ephemeral Public IPs assigned: $(echo "$v_ephemeralips" | tr "\n" "," | sed 's/,$//')." "RED"
     echoStatus "Note that recreating the Machine will reassign a different Public IP." "RED"
-    if [ ${v_skip_question} ]
+    if ${v_skip_question}
     then
       v_input="YES"
     else
@@ -573,7 +573,7 @@ then
   echo "sudo reboot"
   echo "####  END  - NEW DISKS IPS DISCOVERY ####"
 
-  if [ ${v_skip_question} ]
+  if ${v_skip_question}
   then
     v_input="YES"
   else
