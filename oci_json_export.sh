@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.17
+# Version 1.18
 #************************************************************************
 set -e
 
@@ -54,13 +54,11 @@ function echoDebug ()
 
 function funcCheckValueInRange ()
 {
-  [ "$#" -ne 2 ] && return 1
+  [ "$#" -ne 2 -o -z "$1" -o -z "$2" ] && return 1
   local v_arg1 v_arg2 v_array v_opt
   v_arg1="$1" # Value
   v_arg2="$2" # Range
-  [ -z "${v_arg1}" ] && return 1
-  [ -z "${v_arg2}" ] && return 1
-  v_array=$(echo "${v_arg2}" | tr "," "\n")
+  v_array=$(tr "," "\n" <<< "${v_arg2}")
   for v_opt in $v_array
   do
     if [ "$v_opt" == "${v_arg1}" ]
@@ -74,11 +72,11 @@ function funcCheckValueInRange ()
 
 function funcPrintRange ()
 {
-  [ "$#" -ne 1 ] && return 1
+  [ "$#" -ne 1 -o -z "$1" ] && return 1
   local v_arg1 v_opt v_array
   v_arg1="$1" # Range
   [ -z "${v_arg1}" ] && return 1
-  v_array=$(echo "${v_arg1}" | tr "," "\n")
+  v_array=$(tr "," "\n" <<< "${v_arg1}")
   for v_opt in $v_array
   do
     echo "- ${v_opt}"
@@ -98,7 +96,7 @@ v_check=$(funcCheckValueInRange "$v_param1" "$v_valid_opts") && v_ret=$? || v_re
 
 if [ "$v_check" == "N" -o $v_ret -ne 0 ]
 then
-  echoError "Usage: $0 <option> [begin_time] [end_time]"
+  echoError "Usage: $(basename -- "$0") <option> [begin_time] [end_time]"
   echoError ""
   echoError "<option> - Execution Scope."
   echoError "[begin_time] (Optional) - Defines start time when exporting Audit Events."
@@ -178,11 +176,28 @@ fi
 function jsonCompartments ()
 {
   set -e # Exit if error in any call.
-  local v_fout
-  v_fout=$(jsonSimple "iam compartment list --all")
+  local v_fout v_tenancy_id
+  v_fout=$(jsonSimple "iam compartment list --all --compartment-id-in-subtree true")
   ## Remove DELETED compartments to avoid query errors
-  [ -z "$v_fout" ] || v_fout=$(echo "${v_fout}" | ${v_jq} '{data:[.data[] | select(."lifecycle-state" != "DELETED")]}')
-  [ -z "$v_fout" ] || echo "${v_fout}"
+  if [ -n "$v_fout" ]
+  then
+    v_fout=$(${v_jq} '{data:[.data[] | select(."lifecycle-state" != "DELETED")]}' <<< "${v_fout}")
+    v_tenancy_id=$(${v_jq} -r '.data[0]."compartment-id"' <<< "${v_fout}")
+    ## Add root:
+    v_fout=$(${v_jq} '.data += [{
+                                 "compartment-id": "'${v_tenancy_id}'",
+                                 "defined-tags": {},
+                                 "description": null,
+                                 "freeform-tags": {},
+                                 "id": "'${v_tenancy_id}'",
+                                 "inactive-status": null,
+                                 "is-accessible": null,
+                                 "lifecycle-state": "ACTIVE",
+                                 "name": "ROOT",
+                                 "time-created": null
+                                }]' <<< "$v_fout")
+    echo "${v_fout}"
+  fi
 }
 
 function jsonShapes ()
@@ -191,7 +206,7 @@ function jsonShapes ()
   local v_fout
   v_fout=$(jsonAllCompartAddTag "compute shape list --all")
   ## Remove Duplicates
-  [ -z "$v_fout" ] || v_fout=$(echo "${v_fout}" | ${v_jq} '.data | unique | {data : .}')
+  [ -z "$v_fout" ] || v_fout=$(${v_jq} '.data | unique | {data : .}' <<< "${v_fout}")
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
 
@@ -201,8 +216,8 @@ function jsonAudEvents ()
   [ "$#" -eq 1 -a "$1" != "" -a "$1" != " " ] || echoError "${FUNCNAME[0]} skipped. Start Time and Stop Time parameters not given."
   [ "$#" -eq 1 -a "$1" != "" -a "$1" != " " ] || return 1
   local v_arg1 v_arg2 v_out
-  v_arg1=$(echo "$1" | cut -d ' ' -f 1)
-  v_arg2=$(echo "$1" | cut -d ' ' -f 2)
+  v_arg1=$(cut -d ' ' -f 1 <<< "$1")
+  v_arg2=$(cut -d ' ' -f 2 <<< "$1")
   [ "$v_arg1" != "" -a "$v_arg2" != "" ] || echoError "${FUNCNAME[0]} skipped. Wrong parameter format."
   [ "$v_arg1" != "" -a "$v_arg2" != "" ] || return 1
   v_out=$(jsonAllCompart "audit event list --all --start-time "$v_arg1" --end-time "$v_arg2"")
@@ -237,7 +252,7 @@ function jsonImages ()
   v_fout=$(jsonAllCompart "compute image list --all")
   ## Get also Images used By Instaces.
   l_instImages=$(Comp-Instances | ${v_jq} -r '.data[]."image-id"' | sort -u)
-  l_images=$(echo "${v_fout}" | ${v_jq} -r '.data[]."id"')
+  l_images=$(${v_jq} -r '.data[]."id"' <<< "${v_fout}")
   l_diff=$(grep -F -x -v -f <(echo "$l_images") <(echo "$l_instImages")) || l_diff=""
   for v_image in $l_diff
   do
@@ -245,8 +260,8 @@ function jsonImages ()
     v_fout=$(jsonConcat "$v_fout" "$v_out")
   done
   ## Get also Base Images of Images.
-  l_baseImages=$(echo "${v_fout}" | ${v_jq} -r '.data[] | select(."base-image-id" != null) | ."base-image-id"' | sort -u)
-  l_images=$(echo "${v_fout}" | ${v_jq} -r '.data[]."id"')
+  l_baseImages=$(${v_jq} -r '.data[] | select(."base-image-id" != null) | ."base-image-id"' <<< "${v_fout}" | sort -u)
+  l_images=$(${v_jq} -r '.data[]."id"' <<< "${v_fout}")
   l_diff=$(grep -F -x -v -f <(echo "$l_images") <(echo "$l_baseImages")) || l_diff=""
   for v_image in $l_diff
   do
@@ -254,7 +269,7 @@ function jsonImages ()
     v_fout=$(jsonConcat "$v_fout" "$v_out")
   done
   ## Remove Duplicates
-  [ -z "$v_fout" ] || v_fout=$(echo "${v_fout}" | ${v_jq} '.data | unique | {data : .}')
+  [ -z "$v_fout" ] || v_fout=$(${v_jq} '.data | unique | {data : .}' <<< "${v_fout}")
   [ -z "$v_fout" ] || echo "${v_fout}"
 }
 
@@ -342,14 +357,14 @@ function jsonSimple ()
     echoError "########"
   elif [ -n "$v_fout" ]
   then
-    v_next_page=$(echo "${v_fout}" | ${v_jq} -rc '."opc-next-page"')
-    [ "${v_next_page}" == "null" ] || v_fout=$(echo "$v_fout" | ${v_jq} '.data | {data : .}') # Remove Next-Page Tag if it has one.
+    v_next_page=$(${v_jq} -rc '."opc-next-page"' <<< "${v_fout}")
+    [ "${v_next_page}" == "null" ] || v_fout=$(${v_jq} '.data | {data : .}' <<< "$v_fout") # Remove Next-Page Tag if it has one.
     while [ -n "${v_next_page}" -a "${v_next_page}" != "null" ]
     do
       echoDebug "${v_oci} ${v_arg1} --page ${v_next_page}"
       v_out=$(eval "${v_oci} ${v_arg1} --page ${v_next_page}")
-      v_next_page=$(echo "${v_out}" | ${v_jq} -rc '."opc-next-page"')
-      [ -z "$v_out" -o "${v_next_page}" == "null" ] || v_out=$(echo "$v_out" | ${v_jq} '.data | {data : .}') # Remove Next-Page Tag if it has one.
+      v_next_page=$(${v_jq} -rc '."opc-next-page"' <<< "${v_out}")
+      [ -z "$v_out" -o "${v_next_page}" == "null" ] || v_out=$(${v_jq} '.data | {data : .}' <<< "$v_out") # Remove Next-Page Tag if it has one.
       v_fout=$(jsonConcat "$v_fout" "$v_out")
     done
     echo "${v_fout}"
@@ -412,7 +427,7 @@ function jsonGenericMaster ()
     [ $((v_i%2)) -ne 0 ] && v_param_vect+=(${v_arg_vect[v_i]})
   done
 
-  v_tags=$(echo $v_tags | sed 's/,$//')
+  v_tags=$(sed 's/,$//' <<< "$v_tags")
   l_itens=$(${v_arg2} | ${v_jq} -r '.data[] | '$v_tags' ')
   v_i=0
 
@@ -422,7 +437,7 @@ function jsonGenericMaster ()
     v_i=$((v_i+1))
     if [ $v_i -eq ${#v_param_vect[@]} ]
     then
-      v_params=$(echo $v_params | sed 's/ $//')
+      v_params=$(sed 's/ $//' <<< "$v_params")
       v_out=$(${v_arg4} "${v_arg1} ${v_params}")
       v_fout=$(jsonConcat "$v_fout" "$v_out")
       v_i=0
@@ -454,7 +469,7 @@ function jsonGenericMasterAdd ()
     [ $((v_i%3)) -eq 2 ] && v_newit_vect+=(${v_arg_vect[v_i]})
   done
 
-  v_tags=$(echo $v_tags | sed 's/,$//')
+  v_tags=$(sed 's/,$//' <<< "$v_tags")
   l_itens=$(${v_arg2} | ${v_jq} -r '.data[] | '$v_tags' ')
   v_i=0
 
@@ -465,12 +480,12 @@ function jsonGenericMasterAdd ()
     v_i=$((v_i+1))
     if [ $v_i -eq ${#v_param_vect[@]} ]
     then
-      v_params=$(echo $v_params | sed 's/ $//')
-      v_newits=$(echo $v_newits | sed 's/,$//')
+      v_params=$(sed 's/ $//' <<< "$v_params")
+      v_newits=$(sed 's/,$//' <<< "$v_newits")
       v_out=$(${v_arg4} "${v_arg1} ${v_params}")
-      v_chk=$(echo "$v_out" | ${v_jq} '.data // empty' | jq -r 'if type=="array" then "yes" else "no" end')
-      [ "$v_chk" == "no" ] && v_out=$(echo "$v_out" | ${v_jq} '.data += {'${v_newits}'}')
-      [ "$v_chk" == "yes" ] && v_out=$(echo "$v_out" | ${v_jq} '.data[] += {'${v_newits}'}')
+      v_chk=$(${v_jq} '.data // empty' <<< "$v_out" | jq -r 'if type=="array" then "yes" else "no" end')
+      [ "$v_chk" == "no" ] && v_out=$(${v_jq} '.data += {'${v_newits}'}' <<< "$v_out")
+      [ "$v_chk" == "yes" ] && v_out=$(${v_jq} '.data[] += {'${v_newits}'}' <<< "$v_out")
       [ -z "$v_chk" ] || v_fout=$(jsonConcat "$v_fout" "$v_out")
       v_i=0
       v_params=""
@@ -483,39 +498,25 @@ function jsonGenericMasterAdd ()
 function jsonConcat ()
 {
   set -e # Exit if error in any call.
-  [ "$#" -eq 2 ] || echoError "${FUNCNAME[0]} needs 2 parameters"
-  [ "$#" -eq 2 ] || return 1
-  local v_arg1 v_arg2 v_chk_array v_return
+  [ "$#" -eq 2 ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
+  local v_arg1 v_arg2 v_chk_json
   v_arg1="$1" # Json 1
   v_arg2="$2" # Json 2
-  v_return=""
-  ## Check if has ".data"
-  if [ -n "${v_arg1}" ]
-  then
-    v_chk_array=$(echo "${v_arg1}" | ${v_jq} '.data // empty')
-    [ -z "${v_chk_array}" ] && v_arg1=""
-  fi
-  if [ -n "${v_arg2}" ]
-  then
-    v_chk_array=$(echo "${v_arg2}" | ${v_jq} '.data // empty')
-    [ -z "${v_chk_array}" ] && v_arg2=""
-  fi
   ## Concatenate if both not null.
-  if [ -z "${v_arg1}" -a -n "${v_arg2}" ]
-  then
-    v_return="${v_arg2}"
-  elif [ -n "${v_arg1}" -a -z "${v_arg2}" ]
-  then
-    v_return="${v_arg1}"
-  elif [ -n "${v_arg1}" -a -n "${v_arg2}" ]
-  then
-    v_chk_array=$(echo "$v_arg1" | ${v_jq} -r '.data | if type=="array" then "yes" else "no" end')
-    [ "${v_chk_array}" == "no" ] && v_arg1=$(echo "$v_arg1" | ${v_jq} '.data | {"data":[.]}')
-    v_chk_array=$(echo "$v_arg2" | ${v_jq} -r '.data | if type=="array" then "yes" else "no" end')
-    [ "${v_chk_array}" == "no" ] && v_arg2=$(echo "$v_arg2" | ${v_jq} '.data | {"data":[.]}')
-    v_return=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_arg1") <(echo "$v_arg2"))
-  fi
-  echo "${v_return}"
+  [ -z "${v_arg1}" -a -n "${v_arg2}" ] && echo "${v_arg2}" && return 0
+  [ -n "${v_arg1}" -a -z "${v_arg2}" ] && echo "${v_arg1}" && return 0
+  [ -z "${v_arg1}" -a -z "${v_arg2}" ] && return 0
+  ## Check if has ".data"
+  v_chk_json=$(${v_jq} -c 'has("data")' <<< "${v_arg1}")
+  [ "${v_chk_json}" == "false" ] && return 1
+  v_chk_json=$(${v_jq} -c 'has("data")' <<< "${v_arg2}")
+  [ "${v_chk_json}" == "false" ] && return 1
+  v_chk_json=$(${v_jq} -r '.data | if type=="array" then "yes" else "no" end' <<< "$v_arg1")
+  [ "${v_chk_json}" == "no" ] && v_arg1=$(${v_jq} '.data | {"data":[.]}' <<< "$v_arg1")
+  v_chk_json=$(${v_jq} -r '.data | if type=="array" then "yes" else "no" end' <<< "$v_arg2")
+  [ "${v_chk_json}" == "no" ] && v_arg2=$(${v_jq} '.data | {"data":[.]}' <<< "$v_arg2")
+  ${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_arg1") <(echo "$v_arg2")
+  return 0
 }
 
 ################################################
@@ -656,10 +657,10 @@ function jsonConcat ()
 # Using File Descriptor 3 to not interfere on "eval"
 while read -u 3 -r c_line || [ -n "$c_line" ]
 do
-  c_name=$(echo "$c_line" | cut -d ',' -f 1)
-  c_fname=$(echo "$c_line" | cut -d ',' -f 2)
-  c_subfunc=$(echo "$c_line" | cut -d ',' -f 3)
-  c_param=$(echo "$c_line" | cut -d ',' -f 4)
+  c_name=$(cut -d ',' -f 1 <<< "$c_line")
+  c_fname=$(cut -d ',' -f 2 <<< "$c_line")
+  c_subfunc=$(cut -d ',' -f 3 <<< "$c_line")
+  c_param=$(cut -d ',' -f 4 <<< "$c_line")
   if [ -z "${v_tmpfldr}" ]
   then
     eval "function ${c_name} ()
@@ -759,8 +760,8 @@ function main ()
     rm -f "${v_listfile}"
     while read -u 3 -r c_line || [ -n "$c_line" ]
     do
-       c_name=$(echo "$c_line" | cut -d ',' -f 1)
-       c_file=$(echo "$c_line" | cut -d ',' -f 2)
+       c_name=$(cut -d ',' -f 1 <<< "$c_line")
+       c_file=$(cut -d ',' -f 2 <<< "$c_line")
        runAndZip $c_name $c_file "${v_param2} ${v_param3}"
     done 3< <(echo "$v_func_list")
     zip -qmT "$v_outfile" "${v_listfile}"
