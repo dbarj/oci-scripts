@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.09
+# Version 1.10
 #************************************************************************
 set -e
 
@@ -538,16 +538,19 @@ echo "MACHINE RECREATED SUCCESSFULLY"
 
 ## ISCSI Vols
 
-[ -z "$f_jsonvols" ] || tempshell=${v_tmp_dir}/tempshell.sh
-[ -z "$f_jsonvols" ] || echo "set -x" > "$tempshell"
+tempshell=${v_tmp_dir}/tempshell.sh
 
 for v_instvols in $f_instvols
 do
   v_iqn=$(echo "$f_jsonvols" | ${v_jq} -rc 'select (."id" == "'${v_instvols}'") | ."iqn"')
   v_ipv4=$(echo "$f_jsonvols" | ${v_jq} -rc 'select (."id" == "'${v_instvols}'") | ."ipv4"')
   v_port=$(echo "$f_jsonvols" | ${v_jq} -rc 'select (."id" == "'${v_instvols}'") | ."port"')
-  echo "sudo iscsiadm -m node -T ${v_iqn} -p ${v_ipv4}:${v_port} -u" >> "$tempshell"
-  echo "sudo iscsiadm -m node -o delete -T ${v_iqn} -p ${v_ipv4}:${v_port}" >> "$tempshell"
+  v_voltype=$(echo "$f_jsonvols" | ${v_jq} -rc 'select (."id" == "'${v_instvols}'") | ."attachment-type"')
+  if [ "${v_voltype}" == "iscsi" ]
+  then
+    echo "sudo iscsiadm -m node -T ${v_iqn} -p ${v_ipv4}:${v_port} -u" >> "$tempshell"
+    echo "sudo iscsiadm -m node -o delete -T ${v_iqn} -p ${v_ipv4}:${v_port}" >> "$tempshell"
+  fi
 done
 
 f_jsonvols=$(${v_oci} compute volume-attachment list ${v_compartment_arg} --all --instance-id "${v_newInstanceID}" | ${v_jq} -r '.data[] | select(."lifecycle-state" == "ATTACHED")')
@@ -558,15 +561,57 @@ do
   v_iqn=$(echo "$f_jsonvols" | ${v_jq} -rc 'select (."id" == "'${v_instvols}'") | ."iqn"')
   v_ipv4=$(echo "$f_jsonvols" | ${v_jq} -rc 'select (."id" == "'${v_instvols}'") | ."ipv4"')
   v_port=$(echo "$f_jsonvols" | ${v_jq} -rc 'select (."id" == "'${v_instvols}'") | ."port"')
-  echo "sudo iscsiadm -m node -o new -T ${v_iqn} -p ${v_ipv4}:${v_port}" >> "$tempshell"
-  echo "sudo iscsiadm -m node -o update -T ${v_iqn} -n node.startup -v automatic" >> "$tempshell"
-  echo "sudo iscsiadm -m node -T ${v_iqn} -p ${v_ipv4}:${v_port} -l" >> "$tempshell"
+  v_voltype=$(echo "$f_jsonvols" | ${v_jq} -rc 'select (."id" == "'${v_instvols}'") | ."attachment-type"')
+  if [ "${v_voltype}" == "iscsi" ]
+  then
+    echo "sudo iscsiadm -m node -o new -T ${v_iqn} -p ${v_ipv4}:${v_port}" >> "$tempshell"
+    echo "sudo iscsiadm -m node -o update -T ${v_iqn} -n node.startup -v automatic" >> "$tempshell"
+    echo "sudo iscsiadm -m node -T ${v_iqn} -p ${v_ipv4}:${v_port} -l" >> "$tempshell"
+  fi
 done
 
 ## Ask if reconfig using SSH
 
+function waitSSH ()
+{
+  local v_loop v_timeout v_sleep v_total v_ret v_IP
+  v_IP="$1"
+
+  ## Wait SSH Port
+  echo "Checking Server availability $v_IP ..."
+  v_loop=1
+  v_timeout=5
+  v_sleep=30
+  v_total=20
+  while [ ${v_loop} -le ${v_total} ]
+  do
+    timeout ${v_timeout} bash -c "true &>/dev/null </dev/tcp/$v_IP/22" && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 ] && echo 'SSH Port Available!' && break
+    echo "SSH Port Unreachable, please wait. Try ${v_loop} of ${v_total}."
+    ((v_loop++))
+    sleep ${v_sleep}
+  done
+  [ $v_ret -ne 0 ] && return $v_ret
+
+  ## Check SSH Service
+  v_loop=1
+  v_total=10
+  while [ ${v_loop} -le ${v_total} ]
+  do
+    ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ${v_conn_user}@${v_IP} "hostname" && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 ] && echo 'SSH Service Available!' && break
+    echo "SSH Service Unreachable, please wait. Try ${v_loop} of ${v_total}."
+    ((v_loop++))
+    sleep ${v_sleep}
+  done
+  
+  return $v_ret
+
+}
+
 if [ -s "$tempshell" ]
 then
+  sed -i -e '1iset -x\' "$tempshell"
   echo "set +x" >> "$tempshell"
   echo "#### BEGIN - NEW DISKS IPS DISCOVERY ####"
   cat "$tempshell"
@@ -577,28 +622,17 @@ then
   then
     v_input="YES"
   else
-    echo -n "Script above must be executed in target machine. Type \"YES\" to apply the changes via SSH: "
+    echo -n "Script above must be executed in target machine. Type \"YES\" to apply the changes via SSH to ${v_instancePriVnicIP}: "
     read v_input
   fi
   if [ "$v_input" == "YES" ]
   then
-    ## Wait SSH UP
-    echo 'Checking Server availability..'
-    v_total=20
-    v_loop=1
-    while [ ${v_loop} -le ${v_total} ]
-    do
-      timeout 5 bash -c "true &>/dev/null </dev/tcp/$v_instancePriVnicIP/22" && ret=$? || ret=$?
-      [ $ret -eq 0 ] && echo 'Server Available!' && break
-      echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}."
-      ((v_loop++))
-      sleep 30
-    done
-    [ $ret -ne 0 ] && exitError "Server Unreachable"
+    v_conn_user="opc"
+    ## Wait SSH up
+    waitSSH ${v_instancePriVnicIP}
 
     ## Update Attachments
-    ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no opc@${v_instancePriVnicIP} "bash -s" < "$tempshell"
-    ret=$?
+    ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ${v_conn_user}@${v_instancePriVnicIP} "bash -s" < "$tempshell"
 
     ## Restart Machine
     echo 'Bouncing the instance..'
