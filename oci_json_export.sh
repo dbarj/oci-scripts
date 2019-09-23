@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.18
+# Version 1.19
 #************************************************************************
 set -e
 
@@ -29,16 +29,20 @@ set -e
 v_oci="oci"
 v_jq="jq"
 
-# Add any desired oci argument. Keep default to avoid oci_cli_rc usage.
+# Add any desired oci argument exporting OCI_CLI_ARGS. Keep default to avoid oci_cli_rc usage.
 [ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
 [ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
 
 # Don't change it.
 v_min_ocicli="2.4.34"
 
+# Timeout for OCI-CLI calls
+v_oci_timeout=600 # Seconds
+
 # Temporary Folder. Used to stage some repetitive jsons and save time. Empty to disable.
 v_tmpfldr="$(mktemp -d -u -p /tmp/.oci 2>&- || mktemp -d -u)"
 
+# If DEBUG variable is undefined, change to 0.
 [[ "${DEBUG}" == "" ]] && DEBUG=0
 
 function echoError ()
@@ -48,7 +52,8 @@ function echoError ()
 
 function echoDebug ()
 {
-   (( $DEBUG )) && echo "$(date '+%Y%m%d%H%M%S'): $1" >> debug.log
+   local v_filename="${v_this_script%.*}.log"
+   (( $DEBUG )) && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ${v_filename}
    return 0
 }
 
@@ -75,7 +80,6 @@ function funcPrintRange ()
   [ "$#" -ne 1 -o -z "$1" ] && return 1
   local v_arg1 v_opt v_array
   v_arg1="$1" # Range
-  [ -z "${v_arg1}" ] && return 1
   v_array=$(tr "," "\n" <<< "${v_arg1}")
   for v_opt in $v_array
   do
@@ -83,25 +87,22 @@ function funcPrintRange ()
   done
 }
 
-v_valid_opts="ALL,ALL_REGIONS"
+v_this_script="$(basename -- "$0")"
+
 v_func_list=$(sed -e '1,/^# BEGIN DYNFUNC/d' -e '/^# END DYNFUNC/,$d' -e 's/^# *//' $0)
 v_opt_list=$(echo "${v_func_list}" | cut -d ',' -f 1 | sort | tr "\n" ",")
+v_valid_opts="ALL,ALL_REGIONS"
 v_valid_opts="${v_valid_opts},${v_opt_list}"
 
 v_param1="$1"
-v_param2="$2"
-v_param3="$3"
 
 v_check=$(funcCheckValueInRange "$v_param1" "$v_valid_opts") && v_ret=$? || v_ret=$?
 
 if [ "$v_check" == "N" -o $v_ret -ne 0 ]
 then
-  echoError "Usage: $(basename -- "$0") <option> [begin_time] [end_time]"
+  echoError "Usage: ${v_this_script} <option>"
   echoError ""
   echoError "<option> - Execution Scope."
-  echoError "[begin_time] (Optional) - Defines start time when exporting Audit Events."
-  echoError "[end_time]   (Optional) - Defines end time when exporting Audit Events."
-  echoError "* for more information about audit events param formats, run \"oci audit event list -h\"."
   echoError ""
   echoError "Valid <option> values are:"
   echoError "- ALL         - Execute json export for ALL possible options and compress output in a zip file."
@@ -169,6 +170,11 @@ then
   v_tmpfldr=""
 fi
 
+if ! $(which timeout >&- 2>&-)
+then
+  function timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+fi
+
 ################################################
 ############### CUSTOM FUNCTIONS ###############
 ################################################
@@ -182,7 +188,7 @@ function jsonCompartments ()
   if [ -n "$v_fout" ]
   then
     v_fout=$(${v_jq} '{data:[.data[] | select(."lifecycle-state" != "DELETED")]}' <<< "${v_fout}")
-    v_tenancy_id=$(${v_jq} -r '.data[0]."compartment-id"' <<< "${v_fout}")
+    v_tenancy_id=$(${v_jq} -r '[.data[]."compartment-id"] | unique | .[] | select(startswith("ocid1.tenancy.oc1."))' <<< "${v_fout}")
     ## Add root:
     v_fout=$(${v_jq} '.data += [{
                                  "compartment-id": "'${v_tenancy_id}'",
@@ -208,20 +214,6 @@ function jsonShapes ()
   ## Remove Duplicates
   [ -z "$v_fout" ] || v_fout=$(${v_jq} '.data | unique | {data : .}' <<< "${v_fout}")
   [ -z "$v_fout" ] || echo "${v_fout}"
-}
-
-function jsonAudEvents ()
-{
-  set -e # Exit if error in any call.
-  [ "$#" -eq 1 -a "$1" != "" -a "$1" != " " ] || echoError "${FUNCNAME[0]} skipped. Start Time and Stop Time parameters not given."
-  [ "$#" -eq 1 -a "$1" != "" -a "$1" != " " ] || return 1
-  local v_arg1 v_arg2 v_out
-  v_arg1=$(cut -d ' ' -f 1 <<< "$1")
-  v_arg2=$(cut -d ' ' -f 2 <<< "$1")
-  [ "$v_arg1" != "" -a "$v_arg2" != "" ] || echoError "${FUNCNAME[0]} skipped. Wrong parameter format."
-  [ "$v_arg1" != "" -a "$v_arg2" != "" ] || return 1
-  v_out=$(jsonAllCompart "audit event list --all --start-time "$v_arg1" --end-time "$v_arg2"")
-  [ -z "$v_out" ] || echo "${v_out}"
 }
 
 function jsonBkpPolAssign ()
@@ -331,12 +323,12 @@ function jsonSimple ()
 {
   # Call oci-cli with all provided args in $1.
   set -e # Exit if error in any call.
-  [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
-  [ "$#" -eq 1 -a "$1" != "" ] || return 1
+  [ "$#" -eq 1 -a "$1" != "" ] || { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
   local v_arg1 v_out
   v_arg1="$1"
   echoDebug "${v_oci} ${v_arg1}"
-  v_out=$(${v_oci} ${v_arg1})
+  v_out=$(timeout ${v_oci_timeout} ${v_oci} ${v_arg1})
+  #v_out=$(${v_oci} ${v_arg1})
   [ -z "$v_out" ] || echo "${v_out}"
 }
 
@@ -344,12 +336,11 @@ function jsonSimple ()
 {
   # Call oci-cli with all provided args in $1.
   set -e # Exit if error in any call.
-  [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
-  [ "$#" -eq 1 -a "$1" != "" ] || return 1
+  [ "$#" -eq 1 -a "$1" != "" ] || { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
   local v_arg1 v_next_page v_fout v_out v_ret
   v_arg1="$1"
   echoDebug "${v_oci} ${v_arg1}"
-  v_fout=$(eval "${v_oci} ${v_arg1}") && v_ret=$? || v_ret=$?
+  v_fout=$(eval "timeout ${v_oci_timeout} ${v_oci} ${v_arg1}") && v_ret=$? || v_ret=$?
   if [ $v_ret -ne 0 ]
   then
     echoError "## Command Failed:"
@@ -375,8 +366,7 @@ function jsonAllCompart ()
 {
   # Call oci-cli for all existent compartments.
   set -e # Exit if error in any call.
-  [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
-  [ "$#" -eq 1 -a "$1" != "" ] || return 1
+  [ "$#" -eq 1 -a "$1" != "" ] || { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
   jsonGenericMaster "$1" "IAM-Comparts" "id:compartment-id" "jsonSimple"
 }
 
@@ -384,8 +374,7 @@ function jsonAllCompartAddTag ()
 {
   # Call oci-cli for all existent compartments. In the end, add compartment-id tag to json output.
   set -e # Exit if error in any call.
-  [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
-  [ "$#" -eq 1 -a "$1" != "" ] || return 1
+  [ "$#" -eq 1 -a "$1" != "" ] || { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
   jsonGenericMasterAdd "$1" "IAM-Comparts" "id:compartment-id:compartment-id" "jsonSimple"
 }
 
@@ -393,8 +382,7 @@ function jsonAllAD ()
 {
   # Call oci-cli for a combination of all existent Compartments x ADs..
   set -e # Exit if error in any call.
-  [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
-  [ "$#" -eq 1 -a "$1" != "" ] || return 1
+  [ "$#" -eq 1 -a "$1" != "" ] || { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
   jsonGenericMaster "$1" "IAM-ADs" "name:availability-domain" "jsonAllCompart"
 }
 
@@ -402,16 +390,14 @@ function jsonAllVCN ()
 {
   # Call oci-cli for all existent VCNs.
   set -e # Exit if error in any call.
-  [ "$#" -eq 1 -a "$1" != "" ] || echoError "${FUNCNAME[0]} needs 1 parameter"
-  [ "$#" -eq 1 -a "$1" != "" ] || return 1
+  [ "$#" -eq 1 -a "$1" != "" ] || { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
   jsonGenericMaster "$1" "Net-VCNs" "id:vcn-id" "jsonAllCompart"
 }
 
 function jsonGenericMaster ()
 {
   set -e # Exit if error in any call.
-  [ "$#" -eq 4 ] || echoError "${FUNCNAME[0]} needs 4 parameters"
-  [ "$#" -eq 4 ] || return 1
+  [ "$#" -eq 4 ] || { echoError "${FUNCNAME[0]} needs 4 parameters"; return 1; }
   local v_arg1 v_arg2 v_arg3 v_arg4 v_out v_fout l_itens v_item v_arg_vect v_param_vect v_tags v_params v_i
   v_arg1="$1" # Main oci call
   v_arg2="$2" # Subfunction 1 - FuncName
@@ -450,8 +436,7 @@ function jsonGenericMaster ()
 function jsonGenericMasterAdd ()
 {
   set -e # Exit if error in any call.
-  [ "$#" -eq 4 ] || echoError "${FUNCNAME[0]} needs 4 parameters"
-  [ "$#" -eq 4 ] || return 1
+  [ "$#" -eq 4 ] || { echoError "${FUNCNAME[0]} needs 4 parameters"; return 1; }
   local v_arg1 v_arg2 v_arg3 v_arg4 v_out v_fout l_itens v_item v_arg_vect v_param_vect v_tags v_params v_i v_chk v_newit_vect v_newits 
   v_arg1="$1" # Main oci call
   v_arg2="$2" # Subfunction 1 - FuncName
@@ -650,7 +635,6 @@ function jsonConcat ()
 # OS-PreauthReqs,oci_os_preauth-request.json,jsonGenericMasterAdd,"os preauth-request list --all" "OS-Buckets" "name:bucket-name:bucket-name" "jsonSimple"
 # OS-WorkReqs,oci_os_work-request.json,jsonAllCompart,"os work-request list"
 # Search-ResTypes,oci_search_resource-type.json,jsonSimple,"search resource-type list --all"
-# Audit-Events,oci_audit_event.json,jsonAudEvents,"$1"
 # END DYNFUNC
 
 # The while loop below will create a function for each line above.
@@ -701,17 +685,13 @@ function stopIfProcessed ()
 
 function runAndZip ()
 {
-  [ "$#" -ge 2 ] || echoError "${FUNCNAME[0]} needs at least 2 parameters"
-  [ "$#" -ge 2 ] || return 1
-  local v_arg1 v_arg2 v_arg3 v_ret
+  [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
+  local v_arg1 v_arg2 v_ret
   v_arg1="$1"
   v_arg2="$2"
-  v_arg3="$3"
-  [ "$v_arg1" != "" -a "$v_arg2" != "" ] || echoError "${FUNCNAME[0]} needs at least 2 parameters"
-  [ "$v_arg1" != "" -a "$v_arg2" != "" ] || return 1
   echo "Processing \"${v_arg2}\"."
   set +e
-  (${v_arg1} "${v_arg3}" > "${v_arg2}" 2> "${v_arg2}.err")
+  (${v_arg1} > "${v_arg2}" 2> "${v_arg2}.err")
   v_ret=$?
   set -e
   if [ $v_ret -eq 0 ]
@@ -750,19 +730,16 @@ function main ()
   cleanTmpFiles
   if [ "${v_param1}" != "ALL" -a "${v_param1}" != "ALL_REGIONS" ]
   then
-    set +e
-    (${v_param1} "${v_param2} ${v_param3}")
-    v_ret=$?
-    set -e
+    ${v_param1} && v_ret=$? || v_ret=$?
   else
-    [ -n "$v_outfile" ] || v_outfile="oci_json_export_$(date '+%Y%m%d%H%M%S').zip"
-    v_listfile="oci_json_export_list.txt"
+    [ -n "$v_outfile" ] || v_outfile="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S').zip"
+    v_listfile="${v_this_script%.*}_list.txt"
     rm -f "${v_listfile}"
     while read -u 3 -r c_line || [ -n "$c_line" ]
     do
        c_name=$(cut -d ',' -f 1 <<< "$c_line")
        c_file=$(cut -d ',' -f 2 <<< "$c_line")
-       runAndZip $c_name $c_file "${v_param2} ${v_param3}"
+       runAndZip $c_name $c_file
     done 3< <(echo "$v_func_list")
     zip -qmT "$v_outfile" "${v_listfile}"
     v_ret=0
@@ -776,7 +753,7 @@ if [ "${v_param1}" == "ALL_REGIONS" ]
 then
   l_regions=$(IAM-RegionSub | ${v_jq} -r '.data[]."region-name"')
   v_oci_orig="$v_oci"
-  v_outfile_pref="oci_json_export_$(date '+%Y%m%d%H%M%S')"
+  v_outfile_pref="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S')"
   for v_region in $l_regions
   do
     echo "########################"
