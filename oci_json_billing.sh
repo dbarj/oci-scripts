@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2019 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -eo pipefail
 
@@ -220,7 +220,10 @@ function idcsAuth ()
   ${v_jq} -c '.' <<< "${v_login_output}"
 }
 
-function timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+if ! $(which timeout >&- 2>&-)
+then
+  function timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+fi
 
 function refreshTokens ()
 {
