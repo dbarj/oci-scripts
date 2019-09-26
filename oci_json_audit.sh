@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -eo pipefail
 
@@ -37,10 +37,10 @@ v_jq="jq"
 v_min_ocicli="2.4.34"
 
 # Timeout for OCI-CLI calls
-v_oci_timeout=600 # Seconds
+v_oci_timeout=1200 # Seconds
 
-# Default period in days to collect audit info if omitted
-v_def_period=7
+# Default period in days to collect info, if omitted on parameters
+v_def_period=3
 
 # Temporary Folder. Used to stage some repetitive jsons and save time. Empty to disable (not recommended).
 v_tmpfldr="$(mktemp -d -u -p /tmp/.oci 2>&- || mktemp -d -u)"
@@ -51,10 +51,16 @@ v_tmpfldr="$(mktemp -d -u -p /tmp/.oci 2>&- || mktemp -d -u)"
 # If Shell is executed with "-x", all core functions will set this flag 
 printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
 
-# Export HIST_ZIP_FILE with the file name where will keep or read for historical audit info to avoid reprocessing.
+# Export HIST_ZIP_FILE with the file name where will keep or read for historical info to avoid reprocessing.
 [[ "${HIST_ZIP_FILE}" == "" ]] && HIST_ZIP_FILE=""
 
 v_hist_folder="audit_history"
+
+if [ -z "${BASH_VERSION}" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
 
 function echoError ()
 {
@@ -236,6 +242,54 @@ then
 fi
 
 ################################################
+############### CONVERT FUNCTIONS ##############
+################################################
+
+function ConvYMDToEpoch ()
+{
+  local v_in_date
+  v_in_date="$1"
+  case "$(uname -s)" in
+      Linux*)     echo $(date -u '+%s' -d ${v_in_date});;
+      Darwin*)    echo $(date -j -u -f '%Y-%m-%d %T' "${v_in_date} 00:00:00" +"%s");;
+      *)          echo
+  esac  
+}
+
+function ConvYMDtoNextMonthFirstDay ()
+{
+  local v_in_date
+  v_in_date="$1"
+  case "$(uname -s)" in
+      Linux*)     echo $(date -u '+%Y-%m-01' -d "${v_in_date} +1 month -$(($(date +%d)-1)) days");;
+      Darwin*)    echo $(date -j -u -v '+1m' -f '%Y-%m-%d' "${v_in_date}" +'%Y-%m-01');;
+      *)          echo
+  esac  
+}
+
+function ConvEpochToYMDhms ()
+{
+  local v_in_epoch
+  v_in_epoch="$1"
+  case "$(uname -s)" in
+      Linux*)     echo $(date -u '+%Y-%m-%dT%T' -d @${v_in_epoch});;
+      Darwin*)    echo $(date -j -u -f '%s' "${v_in_epoch}" +"%Y-%m-%dT%T");;
+      *)          echo
+  esac  
+}
+
+function ConvEpochToWeekDay ()
+{
+  local v_in_epoch
+  v_in_epoch="$1"
+  case "$(uname -s)" in
+      Linux*)     echo $(date -u '+%u' -d @${v_in_epoch});;
+      Darwin*)    echo $(date -j -u -f '%s' "${v_in_epoch}" +"%u");;
+      *)          echo
+  esac  
+}
+
+################################################
 ############### CUSTOM FUNCTIONS ###############
 ################################################
 
@@ -244,14 +298,15 @@ function jsonCompartments ()
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   local v_fout v_tenancy_id
+  # I don't know why I need to put this OR here, but the set -e seems not to work when subfunction fails
   v_fout=$(jsonSimple "iam compartment list --all --compartment-id-in-subtree true" ".")
   ## Remove DELETED compartments to avoid query errors
   if [ -n "$v_fout" ]
   then
-    v_fout=$(${v_jq} '{data:[.data[] | select(."lifecycle-state" != "DELETED")]}' <<< "${v_fout}")
+    v_fout=$(${v_jq} -c '{data:[.data[] | select(."lifecycle-state" != "DELETED")]}' <<< "${v_fout}")
     v_tenancy_id=$(${v_jq} -r '[.data[]."compartment-id"] | unique | .[] | select(startswith("ocid1.tenancy.oc1."))' <<< "${v_fout}")
     ## Add root:
-    v_fout=$(${v_jq} '.data += [{
+    v_fout=$(${v_jq} -c '.data += [{
                                  "compartment-id": "'${v_tenancy_id}'",
                                  "defined-tags": {},
                                  "description": null,
@@ -344,7 +399,7 @@ function jsonAllCompart ()
 
   for v_item in $l_itens
   do
-    v_out=$(jsonSimple "${v_arg1} --compartment-id $v_item" "${v_arg2}")
+    v_out=$(jsonSimple "${v_arg1} --compartment-id $v_item" "${v_arg2}") || true # Try next compartment if one fails.
     v_fout=$(jsonConcatData "$v_fout" "$v_out")
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
@@ -376,21 +431,59 @@ function runOCI ()
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
-  local v_arg1 v_arg2 v_out v_ret
+  local v_arg1 v_arg2 v_out v_ret v_search
+  local b_out b_err b_ret
   v_arg1="$1"
   v_arg2="$2"
-  v_out=$(getFromHist "${v_arg1}") && v_ret=$? || v_ret=$?
+  [ -n "${v_region}" ] && v_search="${v_region} ${v_arg1}" || v_search="${v_arg1}"
+  v_out=$(getFromHist "${v_search}") && v_ret=$? || v_ret=$?
   if [ $v_ret -ne 0 ]
   then
     echoDebug "${v_oci} ${v_arg1}"
-    v_out=$(eval "timeout ${v_oci_timeout} ${v_oci} ${v_arg1}" | ${v_jq} -c "${v_arg2}")
-    putOnHist "${v_region} ${v_arg1}" "${v_out}" || true
+    if [ -n "${v_tmpfldr}" ]
+    then
+      b_out=$(set +x; callOCI "${v_arg1}" "${v_arg2}" 2> ${v_tmpfldr}/oci.err) && b_ret=$? || b_ret=$?
+      b_err=$(<${v_tmpfldr}/oci.err)
+      rm -f ${v_tmpfldr}/oci.err
+    else
+      # This crasy string will store the stdout in "b_out", stderr in "b_err" and ret in "b_ret"
+      # https://stackoverflow.com/questions/13806626/capture-both-stdout-and-stderr-in-bash
+      set +x
+      eval "$({ b_err=$({ b_out=$( callOCI "${v_arg1}" "${v_arg2}"); b_ret=$?; } 2>&1; declare -p b_out b_ret >&2); declare -p b_err; } 2>&1)"
+      set ${v_dbgflag}
+    fi
+    if [ -n "${b_err}" -o $b_ret -ne 0 ]
+    then
+      [ $b_ret -ne 0 ] && echoError "## Command Failed:"
+      [ $b_ret -eq 0 ] && echoError "## Command Succeeded w/ stderr:"
+      echoError "${v_oci} ${v_arg1}"
+      echoError "########"
+      echoError "${b_err}"
+    fi
+    if [ $b_ret -eq 0 ]
+    then
+      v_out="${b_out}"
+      [ -z "${b_err}" ] && putOnHist "${v_search}" "${v_out}" || true
+    else
+      return $b_ret
+    fi
   else
-    echoDebug "Got \"${v_arg1}\" from Zip Hist."      
+    echoDebug "Got \"${v_search}\" from Zip Hist."      
   fi
   ${v_jq} -e . >/dev/null 2>&1 <<< "${v_out}" && v_ret=$? || v_ret=$?
   echo "${v_out}"
   return ${v_ret}
+}
+
+function callOCI ()
+{
+  set +x # Debug can never be enabled here, or stderr will be a mess. It must be disabled even before calling this func to avoid this set +x to be printed.
+  set -eo pipefail # Exit if error in any call.
+  local v_arg1 v_arg2
+  [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
+  v_arg1="$1"
+  v_arg2="$2"
+  eval "timeout ${v_oci_timeout} ${v_oci} ${v_arg1}" | ${v_jq} -c "${v_arg2}"
 }
 
 function jsonConcatData ()
@@ -418,50 +511,6 @@ function jsonConcatData ()
   return 0
 }
 
-function ConvYMDToEpoch ()
-{
-  local v_in_date
-  v_in_date="$1"
-  case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%s' -d ${v_in_date});;
-      Darwin*)    echo $(date -j -u -f '%Y-%m-%d %T' "${v_in_date} 00:00:00" +"%s");;
-      *)          echo
-  esac  
-}
-
-function ConvYMDtoNextMonthFirstDay ()
-{
-  local v_in_date
-  v_in_date="$1"
-  case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%Y-%m-01' -d "${v_in_date} +1 month -$(($(date +%d)-1)) days");;
-      Darwin*)    echo $(date -j -u -v '+1m' -f '%Y-%m-%d' "${v_in_date}" +'%Y-%m-01');;
-      *)          echo
-  esac  
-}
-
-function ConvEpochToYMDhms ()
-{
-  local v_in_epoch
-  v_in_epoch="$1"
-  case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%Y-%m-%dT%T' -d @${v_in_epoch});;
-      Darwin*)    echo $(date -j -u -f '%s' "${v_in_epoch}" +"%Y-%m-%dT%T");;
-      *)          echo
-  esac  
-}
-
-function ConvEpochToWeekDay ()
-{
-  local v_in_epoch
-  v_in_epoch="$1"
-  case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%u' -d @${v_in_epoch});;
-      Darwin*)    echo $(date -j -u -f '%s' "${v_in_epoch}" +"%u");;
-      *)          echo
-  esac  
-}
-
 ################################################
 ################# OPTION LIST ##################
 ################################################
@@ -470,7 +519,7 @@ function ConvEpochToWeekDay ()
 # 1st - Json Function Name.
 # 2nd - Json Target File Name. Used when ALL parameter is passed to the shell.
 # 3rd - Function to call. Can be one off the generics above or a custom one.
-# 4th - CURL command line to be executed.
+# 4th - OCI command line to be executed.
 
 ## https://docs.oracle.com/en/cloud/get-started/subscriptions-cloud/meter/rest-endpoints.html
 
@@ -494,16 +543,20 @@ do
   then
     eval "function ${c_name} ()
           {
+            set +e
             local c_ret
-            ${c_subfunc} ${c_param} && c_ret=\$? || c_ret=\$?
+            (${c_subfunc} ${c_param})
+            c_ret=\$?
             return \${c_ret}
           }"
   else
     eval "function ${c_name} ()
           {
+            set +e
             local c_ret
             stopIfProcessed ${c_fname} || return 0
-            ${c_subfunc} ${c_param} > ${v_tmpfldr}/.${c_fname} && c_ret=\$? || c_ret=\$?
+            (${c_subfunc} ${c_param} > ${v_tmpfldr}/.${c_fname})
+            c_ret=\$?
             cat ${v_tmpfldr}/.${c_fname}
             return \${c_ret}
           }"
@@ -512,6 +565,7 @@ done 3< <(echo "$v_func_list")
 
 function stopIfProcessed ()
 {
+  # Don't put set -e here.
   set ${v_dbgflag} # Enable Debug
   # If function was executed before, print the output and return error. The dynamic eval function will stop if error is returned.
   local v_arg1="$1"
@@ -532,7 +586,10 @@ function runAndZip ()
   v_arg1="$1"
   v_arg2="$2"
   echo "Processing \"${v_arg2}\"."
-  ${v_arg1} > "${v_arg2}" 2> "${v_arg2}.err" && v_ret=$? || v_ret=$?
+  set +e
+  (${v_arg1} > "${v_arg2}" 2> "${v_arg2}.err") # Executing in subshell as inner function may run with set -e and fail, aborting whole code.
+  v_ret=$?
+  set -e
   if [ $v_ret -eq 0 ]
   then
     if [ -s "${v_arg2}.err" ]
@@ -628,7 +685,7 @@ function putOnHist ()
   v_arg2="$2"
   v_list="audit_hist_list.txt"
   v_sep="|"
-  v_line=$(grep -F "${v_arg1}${v_sep}" "${v_hist_folder}/${v_list}") || true
+  [ -r "${v_hist_folder}/${v_list}" ] && v_line=$(grep -F "${v_arg1}${v_sep}" "${v_hist_folder}/${v_list}") || true
   if [ -z "${v_line}" ]
   then
     if [ -r "${v_hist_folder}/${v_list}" ]
@@ -660,7 +717,10 @@ function main ()
   uncompressHist
   if [ "${v_param1}" != "ALL" -a "${v_param1}" != "ALL_REGIONS" ]
   then
-    ${v_param1} && v_ret=$? || v_ret=$?
+    set +e
+    (${v_param1}) # Executing in subshell as inner function may run with set -e and fail, aborting whole code.
+    v_ret=$?
+    set -e
   else
     [ -n "$v_outfile" ] || v_outfile="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S').zip"
     v_listfile="${v_this_script%.*}_list.txt"
@@ -677,6 +737,8 @@ function main ()
   cleanHist
   cleanTmpFiles
 }
+
+[ "${v_param1}" == "ALL_REGIONS" -o "${v_param1}" == "ALL" ] && DEBUG=1
 
 # Start code execution.
 echoDebug "BEGIN"
@@ -697,6 +759,8 @@ else
   main
 fi
 echoDebug "END"
+
+[ "${v_param1}" == "ALL_REGIONS" -o "${v_param1}" == "ALL" ] && zip -qmT "$v_outfile" "${v_this_script%.*}.log"
 
 [ -z "${v_tmpfldr}" ] || rmdir ${v_tmpfldr} 2>&- || true
 
