@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.02
+# Version 1.03
 #************************************************************************
 set -eo pipefail
 
@@ -37,7 +37,7 @@ v_jq="jq"
 v_min_ocicli="2.4.34"
 
 # Timeout for OCI-CLI calls
-v_oci_timeout=1200 # Seconds
+v_oci_timeout=1800 # Seconds
 
 # Default period in days to collect info, if omitted on parameters
 v_def_period=3
@@ -241,6 +241,14 @@ then
   v_tmpfldr=""
 fi
 
+if [ -z "${HIST_ZIP_FILE}" ]
+then
+  echoError "You haven't exported HIST_ZIP_FILE variable, meaning you won't keep a execution hist that can be reused on next script calls."
+  echoError "With zip history, next executions will be much faster. It's extremelly recommended to enable it."
+  echoError "Press CTRL+C in next 10 seconds if you want to exit and fix this."
+  sleep 10
+fi
+
 ################################################
 ############### CONVERT FUNCTIONS ##############
 ################################################
@@ -324,6 +332,11 @@ function jsonCompartments ()
 
 function jsonAudEvents ()
 {
+  ##########
+  # This function will get your audit info desired range and split it in chunks of 1 day.
+  # Then it will redirect the call to jsonAllCompart.
+  ##########
+
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 0 ] || { echoError "${FUNCNAME[0]} needs 0 parameter"; return 1; }
@@ -353,11 +366,13 @@ function jsonAudEvents ()
   v_next_date_end=$(ConvEpochToYMDhms ${v_next_epoch_end})
 
   v_jq_filter='{data:[.data[] | select(."request-action" != "GET")]}'
+  # v_jq_filter='."opc-next-page" as $np | {data:[.data[] | select(."request-action" != "GET")] , "opc-next-page": $np}'
 
   while true
   do
     # Run
-    v_out=$(jsonAllCompart "audit event list --all --start-time "${v_next_date_start}Z" --end-time "${v_next_date_end}Z"" "${v_jq_filter}")
+    v_out=$(jsonAllCompart "audit event list --all --stream-output --start-time "${v_next_date_start}Z" --end-time "${v_next_date_end}Z"" "${v_jq_filter}")
+    # v_out=$(jsonAllCompart "audit event list --start-time "${v_next_date_start}Z" --end-time "${v_next_date_end}Z"" "${v_jq_filter}")
     # If there is a temp folder, keep results to concatenate in 1 shoot
     if [ -n "${v_tmpfldr}" ]
     then
@@ -388,6 +403,11 @@ function jsonAudEvents ()
 
 function jsonAllCompart ()
 {
+  ##########
+  # This function will get the oci command and pass to jsonSimple.
+  # However, it will loop over all available containers and concatenate the output.
+  ##########
+
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 2 -a "$1" != ""  -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
@@ -407,6 +427,11 @@ function jsonAllCompart ()
 
 function jsonSimple ()
 {
+  ##########
+  # This function will get the oci command args and pass to runOCI.
+  # However, if the output contains pages, it will loop over all available pages and concatenate the output.
+  ##########
+
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 2 -a "$1" != ""  -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
@@ -428,6 +453,11 @@ function jsonSimple ()
 
 function runOCI ()
 {
+  ##########
+  # This function will check if the given OCI cli to execute was already executed before and if the output is stored in HIST_ZIP_FILE.
+  # If not executed, will run callOCI and later save the output.
+  ##########
+
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
@@ -463,7 +493,8 @@ function runOCI ()
     if [ $b_ret -eq 0 ]
     then
       v_out="${b_out}"
-      [ -z "${b_err}" ] && putOnHist "${v_search}" "${v_out}" || true
+      # [ -z "${b_err}" ] && putOnHist "${v_search}" "${v_out}" || true
+      putOnHist "${v_search}" "${v_out}" || true
     else
       return $b_ret
     fi
@@ -477,6 +508,10 @@ function runOCI ()
 
 function callOCI ()
 {
+  ##########
+  # This function will siply call the OCI cli final command "arg1" and apply any JQ filter to it "arg2"
+  ##########
+
   set +x # Debug can never be enabled here, or stderr will be a mess. It must be disabled even before calling this func to avoid this set +x to be printed.
   set -eo pipefail # Exit if error in any call.
   local v_arg1 v_arg2
@@ -488,6 +523,10 @@ function callOCI ()
 
 function jsonConcatData ()
 {
+  ##########
+  # This function will concatenate 2 json arguments in {.data[*]} format in a single one.
+  ##########
+
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 2 ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
@@ -520,8 +559,6 @@ function jsonConcatData ()
 # 2nd - Json Target File Name. Used when ALL parameter is passed to the shell.
 # 3rd - Function to call. Can be one off the generics above or a custom one.
 # 4th - OCI command line to be executed.
-
-## https://docs.oracle.com/en/cloud/get-started/subscriptions-cloud/meter/rest-endpoints.html
 
 # DON'T REMOVE/CHANGE THOSE COMMENTS. THEY ARE USED TO GENERATE DYNAMIC FUNCTIONS
 
@@ -565,6 +602,10 @@ done 3< <(echo "$v_func_list")
 
 function stopIfProcessed ()
 {
+  ##########
+  # In case there is already a file generated for a given dynamic function for the current run, will reuse it instead of running the whole flow again.
+  ##########
+
   # Don't put set -e here.
   set ${v_dbgflag} # Enable Debug
   # If function was executed before, print the output and return error. The dynamic eval function will stop if error is returned.
@@ -581,6 +622,10 @@ function stopIfProcessed ()
 
 function runAndZip ()
 {
+  ##########
+  # In case "ALL" as passed as argument, this function will execute all existing dynamic functions and zip them together.
+  ##########
+
   [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
   local v_arg1 v_arg2 v_ret
   v_arg1="$1"
@@ -616,11 +661,19 @@ function runAndZip ()
 
 function cleanTmpFiles ()
 {
+  ##########
+  # Clean folder where current execution temporary files are placed.
+  ##########
+
   [ -z "${v_tmpfldr}" ] || rm -f "${v_tmpfldr}"/.*.json 2>&- || true
 }
 
 function uncompressHist ()
 {
+  ##########
+  # Uncompress files from previous execution into v_hist_folder path to be used by getFromHist function.
+  ##########
+
   set ${v_dbgflag} # Enable Debug
   if [ -n "${HIST_ZIP_FILE}" ]
   then
@@ -636,6 +689,10 @@ function uncompressHist ()
 
 function cleanHist ()
 {
+  ##########
+  # Clean folder where current history files will be placed.
+  ##########
+
   set ${v_dbgflag} # Enable Debug
   if [ -n "${HIST_ZIP_FILE}" ]
   then
@@ -648,6 +705,10 @@ function cleanHist ()
 
 function getFromHist ()
 {
+  ##########
+  # This function will get the output of an OCI command from the zip hist file that was executed before.
+  ##########
+
   set -eo pipefail
   set ${v_dbgflag} # Enable Debug
   [ -z "${HIST_ZIP_FILE}" ] && return 1
@@ -676,6 +737,10 @@ function getFromHist ()
 
 function putOnHist ()
 {
+  ##########
+  # This function will save the output of an OCI command in a zip hist file to be later used again.
+  ##########
+
   set -eo pipefail
   set ${v_dbgflag} # Enable Debug
   [ -z "${HIST_ZIP_FILE}" ] && return 1
@@ -704,13 +769,17 @@ function putOnHist ()
     [ ! -r "${v_hist_folder}/${v_file}" ] && return 1
     echo "${v_arg2}" > "${v_hist_folder}/${v_file}"
   fi
-  zip -j ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}" >/dev/null
   zip -j ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}" >/dev/null
+  zip -j ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}" >/dev/null
   return 0
 }
 
 function main ()
 {
+  ##########
+  # This the main function. Will execute one given parameter option or loop over all possibilities and zip the output.
+  ##########
+
   # If ALL or ALL_REGIONS, loop over all defined options.
   local c_line c_name c_file
   cleanTmpFiles
