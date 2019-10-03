@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.03
+# Version 1.04
 #************************************************************************
 set -eo pipefail
 
@@ -340,9 +340,9 @@ function jsonAudEvents ()
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 0 ] || { echoError "${FUNCNAME[0]} needs 0 parameter"; return 1; }
-  local v_out v_fout v_jq_filter
+  local v_out v_fout v_jq_filter v_oci_audqry v_search v_ret
   local v_start_epoch v_end_epoch v_jump v_next_epoch_start v_next_date_start v_next_epoch_end v_next_date_end
-  local v_temp_concatenate v_file_counter
+  local v_temp_conc_fdr v_temp_conc_file v_file_counter
 
   v_jump=$((3600*24*1)) # Jump 1 days
 
@@ -352,9 +352,10 @@ function jsonAudEvents ()
   # If there is a temp folder, keep results to concatenate in 1 shoot
   if [ -n "${v_tmpfldr}" ]
   then
-    v_temp_concatenate="${v_tmpfldr}/tempConc"
-    rm -rf ${v_temp_concatenate}
-    mkdir ${v_temp_concatenate}
+    v_temp_conc_fdr="${v_tmpfldr}/tempConc"
+    v_temp_conc_file="${v_temp_conc_fdr}/final.json" # To avoid: Segmentation Fault
+    rm -rf "${v_temp_conc_fdr}"
+    mkdir "${v_temp_conc_fdr}"
   fi
 
   v_file_counter=1
@@ -368,18 +369,32 @@ function jsonAudEvents ()
   v_jq_filter='{data:[.data[] | select(."request-action" != "GET")]}'
   # v_jq_filter='."opc-next-page" as $np | {data:[.data[] | select(."request-action" != "GET")] , "opc-next-page": $np}'
 
+  v_oci_audqry="audit event list --all"
+  #v_oci_audqry="audit event list --all --stream-output"
+  #v_oci_audqry="audit event list"
+
   while true
   do
-    # Run
-    v_out=$(jsonAllCompart "audit event list --all --stream-output --start-time "${v_next_date_start}Z" --end-time "${v_next_date_end}Z"" "${v_jq_filter}")
-    # v_out=$(jsonAllCompart "audit event list --start-time "${v_next_date_start}Z" --end-time "${v_next_date_end}Z"" "${v_jq_filter}")
+    v_search="${v_oci_audqry} ${v_next_date_start}Z ${v_next_date_end}Z ALL_COMP"
+    [ -n "${v_region}" ] && v_search="${v_region} ${v_search}"
+    # Will first try to get the output from the historical zip. If can't find it, will call the json generator for all compartments.
+    v_out=$(getFromHist "${v_search}") && v_ret=$? || v_ret=$?
+    if [ $v_ret -ne 0 ]
+    then
+      # Run
+      v_out=$(jsonAllCompart "${v_oci_audqry} --start-time "${v_next_date_start}Z" --end-time "${v_next_date_end}Z"" "${v_jq_filter}") && v_ret=$? || v_ret=$?
+      [ $v_ret -ne 0 -a $v_ret -ne 20 ] && return $v_ret # Will only continue if return code is 0 or 20 (20=some compartment had an error)
+      [ $v_ret -eq 0 ] && { (putOnHist "${v_search}" "${v_out}") || true ; }
+    else
+      echoDebug "Got \"${v_search}\" from Zip Hist."
+    fi
     # If there is a temp folder, keep results to concatenate in 1 shoot
     if [ -n "${v_tmpfldr}" ]
     then
-      echo "$v_out" >> "${v_temp_concatenate}/${v_file_counter}.json"
+      cat > "${v_temp_conc_fdr}/${v_file_counter}.json" <<< "$v_out"
       ((v_file_counter++))
     else
-      [ -n "$v_out" ] && v_fout=$(jsonConcatData "$v_fout" "$v_out")
+      [ ${#v_out} -ne 0 ] && v_fout=$(jsonConcatData "$v_fout" "$v_out")
     fi
     # Prepare for next loop
     v_next_epoch_start=${v_next_epoch_end} # Next second = Next day
@@ -393,12 +408,15 @@ function jsonAudEvents ()
   if [ -n "${v_tmpfldr}" ]
   then
     # To avoid: Argument list too long
-    find "${v_temp_concatenate}" -name "*.json" -type f -exec cat {} + > "${v_temp_concatenate}"/all_json.concat
-    v_fout=$(${v_jq} -c 'reduce inputs as $i (.; .data += $i.data)' "${v_temp_concatenate}"/all_json.concat)
-    rm -rf ${v_temp_concatenate}
+    find "${v_temp_conc_fdr}" -name "*.json" -type f -exec cat {} + > "${v_temp_conc_fdr}"/all_json.concat
+    ${v_jq} -c 'reduce inputs as $i (.; .data += $i.data)' "${v_temp_conc_fdr}"/all_json.concat > "${v_temp_conc_file}"
+    ${v_jq} '.' "${v_temp_conc_file}"
+    rm -rf "${v_temp_conc_fdr}"
+  else
+    [ ${#v_fout} -ne 0 ] && ${v_jq} '.' <<< "${v_fout}"
   fi
 
-  [ -z "$v_fout" ] || ${v_jq} '.' <<< "${v_fout}"
+  return 0
 }
 
 function jsonAllCompart ()
@@ -406,23 +424,26 @@ function jsonAllCompart ()
   ##########
   # This function will get the oci command and pass to jsonSimple.
   # However, it will loop over all available containers and concatenate the output.
+  # Return code: 0 = OK for all. | 20 = Some compartment with error. | Any other = error.
   ##########
 
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 2 -a "$1" != ""  -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
-  local v_arg1 v_arg2 v_out v_fout l_itens v_item
+  local v_arg1 v_arg2 v_out v_fout l_itens v_item v_ret
   v_arg1="$1" # Main oci call
   v_arg2="$2" # JQ Filter clause
 
+  v_ret=0 
   l_itens=$(IAM-Comparts | ${v_jq} -r '.data[].id')
 
   for v_item in $l_itens
   do
-    v_out=$(jsonSimple "${v_arg1} --compartment-id $v_item" "${v_arg2}") || true # Try next compartment if one fails.
+    v_out=$(jsonSimple "${v_arg1} --compartment-id $v_item" "${v_arg2}") || v_ret=20 # Try next compartment if one fails and set return code to 20.
     v_fout=$(jsonConcatData "$v_fout" "$v_out")
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
+  return ${v_ret}
 }
 
 function jsonSimple ()
@@ -482,9 +503,10 @@ function runOCI ()
       eval "$({ b_err=$({ b_out=$( callOCI "${v_arg1}" "${v_arg2}"); b_ret=$?; } 2>&1; declare -p b_out b_ret >&2); declare -p b_err; } 2>&1)"
       set ${v_dbgflag}
     fi
+    [ "${b_out}" == '{"data":[]}' ] && b_out='' # In case it is empty data, clean it for space savings.
     if [ -n "${b_err}" -o $b_ret -ne 0 ]
     then
-      [ $b_ret -ne 0 ] && echoError "## Command Failed:"
+      [ $b_ret -ne 0 ] && { echoError "## Command Failed (ret: ${b_ret}):"; echoDebug "Command Failed (ret: ${b_ret})"; }
       [ $b_ret -eq 0 ] && echoError "## Command Succeeded w/ stderr:"
       echoError "${v_oci} ${v_arg1}"
       echoError "########"
@@ -706,7 +728,7 @@ function cleanHist ()
 function getFromHist ()
 {
   ##########
-  # This function will get the output of an OCI command from the zip hist file that was executed before.
+  # This function will get the output of the command from the zip hist file that was executed before.
   ##########
 
   set -eo pipefail
@@ -738,12 +760,13 @@ function getFromHist ()
 function putOnHist ()
 {
   ##########
-  # This function will save the output of an OCI command in a zip hist file to be later used again.
+  # This function will save the output of the command in a zip hist file to be later used again.
   ##########
 
   set -eo pipefail
   set ${v_dbgflag} # Enable Debug
   [ -z "${HIST_ZIP_FILE}" ] && return 1
+  [ ! -d "${v_hist_folder}" ] && return 1
   [ "$#" -ne 2 ] && { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
   local v_arg1 v_arg2 v_line v_sep v_list v_file v_last
   v_arg1="$1"
@@ -807,9 +830,9 @@ function main ()
   cleanTmpFiles
 }
 
+# Start code execution.
 [ "${v_param1}" == "ALL_REGIONS" -o "${v_param1}" == "ALL" ] && DEBUG=1
 
-# Start code execution.
 echoDebug "BEGIN"
 if [ "${v_param1}" == "ALL_REGIONS" ]
 then
