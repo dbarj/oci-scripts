@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2019 by Rodrigo Jorge
-# Version 1.02
+# Version 1.03
 #************************************************************************
 set -eo pipefail
 
@@ -29,7 +29,10 @@ set -eo pipefail
 v_curl="curl"
 v_jq="jq"
 
-# Default period in days to collect billing info if omitted
+# Timeout for CURL calls
+v_curl_timeout=600 # Seconds
+
+# Default period in days to collect info, if omitted on parameters
 v_def_period=90
 
 # Temporary Folder. Used to stage some repetitive jsons and save time. Empty to disable (not recommended).
@@ -41,10 +44,16 @@ v_tmpfldr="$(mktemp -d -u -p /tmp/.oci 2>&- || mktemp -d -u)"
 # If Shell is executed with "-x", all core functions will set this flag 
 printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
 
-# Export HIST_ZIP_FILE with the file name where will keep or read for historical billing info to avoid reprocessing.
+# Export HIST_ZIP_FILE with the file name where will keep or read for historical info to avoid reprocessing.
 [[ "${HIST_ZIP_FILE}" == "" ]] && HIST_ZIP_FILE=""
 
 v_hist_folder="billing_history"
+
+if [ -z "${BASH_VERSION}" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
 
 function echoError ()
 {
@@ -281,6 +290,62 @@ then
   v_tmpfldr=""
 fi
 
+if [ -z "${HIST_ZIP_FILE}" ]
+then
+  echoError "You haven't exported HIST_ZIP_FILE variable, meaning you won't keep a execution hist that can be reused on next script calls."
+  echoError "With zip history, next executions will be much faster. It's extremelly recommended to enable it."
+  echoError "Press CTRL+C in next 10 seconds if you want to exit and fix this."
+  sleep 10
+fi
+
+################################################
+############### CONVERT FUNCTIONS ##############
+################################################
+
+function ConvYMDToEpoch ()
+{
+  local v_in_date
+  v_in_date="$1"
+  case "$(uname -s)" in
+      Linux*)     echo $(date -u '+%s' -d ${v_in_date});;
+      Darwin*)    echo $(date -j -u -f '%Y-%m-%d %T' "${v_in_date} 00:00:00" +"%s");;
+      *)          echo
+  esac  
+}
+
+function ConvYMDtoNextMonthFirstDay ()
+{
+  local v_in_date
+  v_in_date="$1"
+  case "$(uname -s)" in
+      Linux*)     echo $(date -u '+%Y-%m-01' -d "${v_in_date} +1 month -$(($(date +%d)-1)) days");;
+      Darwin*)    echo $(date -j -u -v '+1m' -f '%Y-%m-%d' "${v_in_date}" +'%Y-%m-01');;
+      *)          echo
+  esac  
+}
+
+function ConvEpochToYMDhms ()
+{
+  local v_in_epoch
+  v_in_epoch="$1"
+  case "$(uname -s)" in
+      Linux*)     echo $(date -u '+%Y-%m-%dT%T' -d @${v_in_epoch});;
+      Darwin*)    echo $(date -j -u -f '%s' "${v_in_epoch}" +"%Y-%m-%dT%T");;
+      *)          echo
+  esac  
+}
+
+function ConvEpochToWeekDay ()
+{
+  local v_in_epoch
+  v_in_epoch="$1"
+  case "$(uname -s)" in
+      Linux*)     echo $(date -u '+%u' -d @${v_in_epoch});;
+      Darwin*)    echo $(date -j -u -f '%s' "${v_in_epoch}" +"%u");;
+      *)          echo
+  esac  
+}
+
 ################################################
 ############### CUSTOM FUNCTIONS ###############
 ################################################
@@ -292,34 +357,77 @@ function runCurl ()
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -ge 1 -a "$1" != "" ] || { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
-  local v_arg1 v_arg2 v_out v_check v_ret v_token
+
+  local v_arg1 v_arg2 v_out v_ret
+  local b_out b_err b_ret
   v_arg1="$1"
   v_arg2="$2"
   v_out=$(getFromHist "${v_arg1}") && v_ret=$? || v_ret=$?
   if [ $v_ret -ne 0 ]
   then
-    if [ "${v_conn_type}" == 'CLIENT' ]
+    if [ -n "${v_tmpfldr}" ]
     then
-      if [ $(date -u '+%s') -ge $(getTokenExpire "${v_arg2}") ]
-      then
-        echoDebug "Refreshing Tokens"
-        refreshTokens
-      fi
-      v_token=$(getTokenValue "${v_arg2}")
-      echoDebug "${v_curl} -k -X GET -H \"Authorization: Bearer \${CLIENT_TOKEN}\" \"${v_arg1}\""      
-      v_out=$(timeout 600 ${v_curl} -X GET -H "Authorization: Bearer ${v_token}" "${v_arg1}" 2>&-) && v_ret=$? || v_ret=$?
-      [ $v_ret -eq 127 ] && v_out=$(timeout 60 ${v_curl} -X GET -H "Authorization: Bearer ${v_token}" "${v_arg1}" 2>&-)
+      b_out=$(set +x; callCurl "${v_arg1}" "${v_arg2}" 2> ${v_tmpfldr}/oci.err) && b_ret=$? || b_ret=$?
+      b_err=$(<${v_tmpfldr}/oci.err)
+      rm -f ${v_tmpfldr}/oci.err
     else
-      echoDebug "${v_curl} -X GET -H \"X-ID-TENANT-NAME:${CLIENT_DOMAIN}\" -u \"${CLIENT_USER}:\${CLIENT_PASS}\" \"${v_arg1}\""
-      v_out=$(timeout 600 ${v_curl} -X GET -H "X-ID-TENANT-NAME:${CLIENT_DOMAIN}" -u "${CLIENT_USER}:${CLIENT_PASS}" "${v_arg1}" 2>&-)
+      # This crasy string will store the stdout in "b_out", stderr in "b_err" and ret in "b_ret"
+      # https://stackoverflow.com/questions/13806626/capture-both-stdout-and-stderr-in-bash
+      set +x
+      eval "$({ b_err=$({ b_out=$( callCurl "${v_arg1}" "${v_arg2}"); b_ret=$?; } 2>&1; declare -p b_out b_ret >&2); declare -p b_err; } 2>&1)"
+      set ${v_dbgflag}
     fi
-    putOnHist "${v_arg1}" "${v_out}" || true
+    if [ -n "${b_err}" -o $b_ret -ne 0 ]
+    then
+      [ $b_ret -ne 0 ] && { echoError "## Command Failed (ret: ${b_ret}):"; echoDebug "Command Failed (ret: ${b_ret})"; }
+      [ $b_ret -eq 0 ] && echoError "## Command Succeeded w/ stderr:"
+      echoError "${v_oci} ${v_arg1}"
+      echoError "########"
+      echoError "${b_err}"
+    fi
+    if [ $b_ret -eq 0 ]
+    then
+      v_out="${b_out}"
+      # [ -z "${b_err}" ] && putOnHist "${v_arg1}" "${v_out}" || true
+      putOnHist "${v_arg1}" "${v_out}" || true
+    else
+      return $b_ret
+    fi
   else
     echoDebug "Got \"${v_arg1}\" from Zip Hist."      
   fi
   ${v_jq} -e . >/dev/null 2>&1 <<< "${v_out}" && v_ret=$? || v_ret=$?
   echo "${v_out}"
   return ${v_ret}
+}
+
+function callCurl ()
+{
+  ##########
+  # This function will siply call the CURL final command "arg1" and with optional token file in "arg2"
+  ##########
+
+  set +x # Debug can never be enabled here, or stderr will be a mess. It must be disabled even before calling this func to avoid this set +x to be printed.
+  set -eo pipefail # Exit if error in any call.
+  local v_arg1 v_arg2 v_token
+  [ "$#" -ge 1 -a "$1" != "" ] || { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
+  v_arg1="$1"
+  v_arg2="$2"
+
+  if [ "${v_conn_type}" == 'CLIENT' ]
+  then
+    if [ $(date -u '+%s') -ge $(getTokenExpire "${v_arg2}") ]
+    then
+      echoDebug "Refreshing Tokens"
+      (refreshTokens)
+    fi
+    v_token=$(getTokenValue "${v_arg2}")
+    echoDebug "${v_curl} -s -X GET -H \"Authorization: Bearer \${CLIENT_TOKEN}\" \"${v_arg1}\""      
+    timeout ${v_curl_timeout} ${v_curl} -s -X GET -H "Authorization: Bearer ${v_token}" "${v_arg1}"
+  else
+    echoDebug "${v_curl} -s -X GET -H \"X-ID-TENANT-NAME:${CLIENT_DOMAIN}\" -u \"${CLIENT_USER}:\${CLIENT_PASS}\" \"${v_arg1}\""
+    timeout ${v_curl_timeout} ${v_curl} -s -X GET -H "X-ID-TENANT-NAME:${CLIENT_DOMAIN}" -u "${CLIENT_USER}:${CLIENT_PASS}" "${v_arg1}"
+  fi
 }
 
 function loopCurl ()
@@ -395,50 +503,6 @@ function curlAccountEnt ()
   [ -z "$v_fout" ] || ${v_jq} '.' <<< "${v_fout}"
 }
 
-function ConvYMDToEpoch ()
-{
-  local v_in_date
-  v_in_date="$1"
-  case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%s' -d ${v_in_date});;
-      Darwin*)    echo $(date -j -u -f '%Y-%m-%d %T' "${v_in_date} 00:00:00" +"%s");;
-      *)          echo
-  esac  
-}
-
-function ConvYMDtoNextMonthFirstDay ()
-{
-  local v_in_date
-  v_in_date="$1"
-  case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%Y-%m-01' -d "${v_in_date} +1 month -$(($(date +%d)-1)) days");;
-      Darwin*)    echo $(date -j -u -v '+1m' -f '%Y-%m-%d' "${v_in_date}" +'%Y-%m-01');;
-      *)          echo
-  esac  
-}
-
-function ConvEpochToYMDhms ()
-{
-  local v_in_epoch
-  v_in_epoch="$1"
-  case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%Y-%m-%dT%T' -d @${v_in_epoch});;
-      Darwin*)    echo $(date -j -u -f '%s' "${v_in_epoch}" +"%Y-%m-%dT%T");;
-      *)          echo
-  esac  
-}
-
-function ConvEpochToWeekDay ()
-{
-  local v_in_epoch
-  v_in_epoch="$1"
-  case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%u' -d @${v_in_epoch});;
-      Darwin*)    echo $(date -j -u -f '%s' "${v_in_epoch}" +"%u");;
-      *)          echo
-  esac  
-}
-
 function curlAccountTagHourly ()
 {
   set -eo pipefail # Exit if error in any call.
@@ -486,8 +550,8 @@ function curlAccountTag ()
   if [ -n "${v_tmpfldr}" ]
   then
     v_temp_concatenate="${v_tmpfldr}/tempConc"
-    rm -rf ${v_temp_concatenate}
-    mkdir ${v_temp_concatenate}
+    rm -rf "${v_temp_concatenate}"
+    mkdir "${v_temp_concatenate}"
   fi
 
   v_file_counter=1
@@ -541,7 +605,7 @@ function curlAccountTag ()
     # To avoid: Argument list too long
     find "${v_temp_concatenate}" -name "*.json" -type f -exec cat {} + > "${v_temp_concatenate}"/all_json.concat
     v_fout=$(${v_jq} -c 'reduce inputs as $i (.; .data += $i.data)' "${v_temp_concatenate}"/all_json.concat)
-    rm -rf ${v_temp_concatenate}
+    rm -rf "${v_temp_concatenate}"
   fi
 
   [ -z "$v_fout" ] || ${v_jq} '.' <<< "${v_fout}"
@@ -619,6 +683,10 @@ function jsonConcatItems ()
 
 function jsonConcatData ()
 {
+  ##########
+  # This function will concatenate 2 json arguments in {.data[*]} format in a single one.
+  ##########
+
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 2 ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
@@ -682,16 +750,20 @@ do
   then
     eval "function ${c_name} ()
           {
+            set +e
             local c_ret
-            ${c_subfunc} ${c_param} && c_ret=\$? || c_ret=\$?
+            (${c_subfunc} ${c_param})
+            c_ret=\$?
             return \${c_ret}
           }"
   else
     eval "function ${c_name} ()
           {
+            set +e
             local c_ret
             stopIfProcessed ${c_fname} || return 0
-            ${c_subfunc} ${c_param} > ${v_tmpfldr}/.${c_fname} && c_ret=\$? || c_ret=\$?
+            (${c_subfunc} ${c_param} > ${v_tmpfldr}/.${c_fname})
+            c_ret=\$?
             cat ${v_tmpfldr}/.${c_fname}
             return \${c_ret}
           }"
@@ -720,7 +792,10 @@ function runAndZip ()
   v_arg1="$1"
   v_arg2="$2"
   echo "Processing \"${v_arg2}\"."
-  ${v_arg1} > "${v_arg2}" 2> "${v_arg2}.err" && v_ret=$? || v_ret=$?
+  set +e
+  (${v_arg1} > "${v_arg2}" 2> "${v_arg2}.err") # Executing in subshell as inner function may run with set -e and fail, aborting whole code.
+  v_ret=$?
+  set -e
   if [ $v_ret -eq 0 ]
   then
     if [ -s "${v_arg2}.err" ]
@@ -779,6 +854,10 @@ function cleanHist ()
 
 function getFromHist ()
 {
+  ##########
+  # This function will get the output of the command from the zip hist file that was executed before.
+  ##########
+
   set -eo pipefail
   set ${v_dbgflag} # Enable Debug
   [ -z "${HIST_ZIP_FILE}" ] && return 1
@@ -807,16 +886,21 @@ function getFromHist ()
 
 function putOnHist ()
 {
+  ##########
+  # This function will save the output of the command in a zip hist file to be later used again.
+  ##########
+
   set -eo pipefail
   set ${v_dbgflag} # Enable Debug
   [ -z "${HIST_ZIP_FILE}" ] && return 1
+  [ ! -d "${v_hist_folder}" ] && return 1
   [ "$#" -ne 2 ] && { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
   local v_arg1 v_arg2 v_line v_sep v_list v_file v_last
   v_arg1="$1"
   v_arg2="$2"
   v_list="billing_hist_list.txt"
   v_sep="|"
-  v_line=$(grep -F "${v_arg1}${v_sep}" "${v_hist_folder}/${v_list}") || true
+  [ -r "${v_hist_folder}/${v_list}" ] && v_line=$(grep -F "${v_arg1}${v_sep}" "${v_hist_folder}/${v_list}") || true
   if [ -z "${v_line}" ]
   then
     if [ -r "${v_hist_folder}/${v_list}" ]
@@ -835,20 +919,27 @@ function putOnHist ()
     [ ! -r "${v_hist_folder}/${v_file}" ] && return 1
     echo "${v_arg2}" > "${v_hist_folder}/${v_file}"
   fi
-  zip -j ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}" >/dev/null
   zip -j ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}" >/dev/null
+  zip -j ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}" >/dev/null
   return 0
 }
 
 function main ()
 {
-  # If ALL or ALL_REGIONS, loop over all defined options.
+  ##########
+  # This the main function. Will execute one given parameter option or loop over all possibilities and zip the output.
+  ##########
+
+  # If ALL, loop over all defined options.
   local c_line c_name c_file
   cleanTmpFiles
   uncompressHist
   if [ "${v_param1}" != "ALL" ]
   then
-    ${v_param1} && v_ret=$? || v_ret=$?
+    set +e
+    (${v_param1}) # Executing in subshell as inner function may run with set -e and fail, aborting whole code.
+    v_ret=$?
+    set -e
   else
     [ -n "$v_outfile" ] || v_outfile="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S').zip"
     v_listfile="${v_this_script%.*}_list.txt"
@@ -867,9 +958,13 @@ function main ()
 }
 
 # Start code execution.
+[ "${v_param1}" == "ALL" ] && DEBUG=1
+
 echoDebug "BEGIN"
 main
 echoDebug "END"
+
+[ "${v_param1}" == "ALL" ] && zip -qmT "$v_outfile" "${v_this_script%.*}.log"
 
 if [ "${v_conn_type}" == 'CLIENT' ]
 then
