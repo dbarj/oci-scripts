@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.04
+# Version 1.05
 #************************************************************************
 set -eo pipefail
 
@@ -162,6 +162,8 @@ then
   fi
 fi
 
+v_zip="zip -9"
+
 v_cur_ocicli=$(${v_oci} -v)
 
 if [ "${v_min_ocicli}" != "`echo -e "${v_min_ocicli}\n${v_cur_ocicli}" | sort -V | head -n1`" ]
@@ -186,15 +188,15 @@ v_end_time="${v_param3}"
 if [ -z "${v_start_time}" ]
 then
   case "$(uname -s)" in
-      Linux*)     v_start_time=$(date -d "-${v_def_period} day" +%Y-%m-%d);;
-      Darwin*)    v_start_time=$(date -v-${v_def_period}d +%Y-%m-%d);;
-      *)          v_start_time=$(date +%Y-%m-%d)
+      Linux*)     v_start_time=$(date -u -d "-${v_def_period} day" +%Y-%m-%d);;
+      Darwin*)    v_start_time=$(date -u -v-${v_def_period}d +%Y-%m-%d);;
+      *)          v_start_time=$(date -u +%Y-%m-%d)
   esac
 fi
 
 if [ -z "${v_end_time}" ]
 then
-  v_end_time=$(date +%Y-%m-%d)
+  v_end_time=$(date -u +%Y-%m-%d)
 fi
 
 function check_input_format()
@@ -344,7 +346,7 @@ function jsonAudEvents ()
   local v_start_epoch v_end_epoch v_jump v_next_epoch_start v_next_date_start v_next_epoch_end v_next_date_end
   local v_temp_conc_fdr v_temp_conc_file v_file_counter
 
-  v_jump=$((3600*24*1)) # Jump 1 days
+  v_jump=$((3600*24*1)) # Jump 1 day
 
   v_start_epoch=$(ConvYMDToEpoch ${v_start_time})
   v_end_epoch=$(ConvYMDToEpoch ${v_end_time})
@@ -662,19 +664,19 @@ function runAndZip ()
     if [ -s "${v_arg2}.err" ]
     then
       mv "${v_arg2}.err" "${v_arg2}.log"
-      zip -qmT "$v_outfile" "${v_arg2}.log"
+      ${v_zip} -qm "$v_outfile" "${v_arg2}.log"
     fi
   else
     if [ -f "${v_arg2}.err" ]
     then
       echo "Skipped. Check \"${v_arg2}.err\" for more details."
-      zip -qmT "$v_outfile" "${v_arg2}.err"
+      ${v_zip} -qm "$v_outfile" "${v_arg2}.err"
     fi
   fi
   [ ! -f "${v_arg2}.err" ] || rm -f "${v_arg2}.err"
   if [ -s "${v_arg2}" ]
   then
-    zip -qmT "$v_outfile" "${v_arg2}"
+    ${v_zip} -qm "$v_outfile" "${v_arg2}"
   else
     rm -f "${v_arg2}"
   fi
@@ -687,7 +689,8 @@ function cleanTmpFiles ()
   # Clean folder where current execution temporary files are placed.
   ##########
 
-  [ -z "${v_tmpfldr}" ] || rm -f "${v_tmpfldr}"/.*.json 2>&- || true
+  [ -n "${v_tmpfldr}" ] && rm -f "${v_tmpfldr}"/.*.json 2>&- || true
+  return 0
 }
 
 function uncompressHist ()
@@ -792,8 +795,8 @@ function putOnHist ()
     [ ! -r "${v_hist_folder}/${v_file}" ] && return 1
     echo "${v_arg2}" > "${v_hist_folder}/${v_file}"
   fi
-  zip -j ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}" >/dev/null
-  zip -j ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}" >/dev/null
+  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}" >/dev/null
+  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}" >/dev/null
   return 0
 }
 
@@ -823,7 +826,7 @@ function main ()
        c_file=$(cut -d ',' -f 2 <<< "$c_line")
        runAndZip $c_name $c_file
     done 3< <(echo "$v_func_list")
-    zip -qmT "$v_outfile" "${v_listfile}"
+    ${v_zip} -qm "$v_outfile" "${v_listfile}"
     v_ret=0
   fi
   cleanHist
@@ -852,9 +855,9 @@ else
 fi
 echoDebug "END"
 
-[ "${v_param1}" == "ALL_REGIONS" -o "${v_param1}" == "ALL" ] && zip -qmT "$v_outfile" "${v_this_script%.*}.log"
+[ "${v_param1}" == "ALL_REGIONS" -o "${v_param1}" == "ALL" ] && ${v_zip} -qm "$v_outfile" "${v_this_script%.*}.log"
 
-[ -z "${v_tmpfldr}" ] || rmdir ${v_tmpfldr} 2>&- || true
+[ -n "${v_tmpfldr}" ] && rmdir ${v_tmpfldr} 2>&- || true
 
 exit ${v_ret}
 ###
