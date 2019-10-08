@@ -21,12 +21,24 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.03
+# Version 1.04
 #************************************************************************
 set -e
 
 # Define paths for oci-cli and jq or put them on $PATH. Don't use relative PATHs in the variables below.
 v_jq="jq"
+
+# If MERGE_UNIQUE variable is undefined, change to 1.
+# 0 = Output JSON will be simply merged.
+# 1 = Output JSON will be returned in sorted order, with duplicates removed.
+
+[[ "${MERGE_UNIQUE}" == "" ]] && MERGE_UNIQUE=1
+
+if [ -z "${BASH_VERSION}" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
 
 function echoError ()
 {
@@ -47,6 +59,8 @@ then
 fi
 
 v_zip_file_prefix="$1"
+
+[ "${MERGE_UNIQUE}" != "0" -a "${MERGE_UNIQUE}" != "1" ] && exitError "MERGE_UNIQUE must be 0 or 1. Found: ${MERGE_UNIQUE}"
 
 v_zip_files=$(ls -1 "${v_zip_file_prefix}"_*.zip 2>&-) && v_ret=$? || v_ret=$?
 [ $v_ret -eq 0 ] || exitError "Can't find any file with prefix ${v_zip_file_prefix}"
@@ -78,12 +92,11 @@ fi
 
 function mergeJson ()
 {
-  set -e # Exit if error in any call.
-  [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || echoError "${FUNCNAME[0]} needs 2 parameters"
-  [ "$#" -eq 2 -a "$1" != "" -a "$2" != "" ] || return 1
-  local v_file1 v_file2 v_out v_comp v_file1_cont v_file2_cont v_chk_array
-  v_file1=$1
-  v_file2=$2
+  set -eo pipefail # Exit if error in any call.
+  [ "$#" -ne 2 -o "$1" == "" -o "$2" == "" ] && { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
+  local v_file1 v_file2 v_comp v_chk_array
+  v_file1="$1"
+  v_file2="$2"
   [ -f "${v_file1}" ] || exitError "File ${v_file1} does not exist."
   [ -f "${v_file2}" ] || exitError "File ${v_file2} does not exist."
   if [ ! -s "${v_file1}" ]
@@ -101,16 +114,19 @@ function mergeJson ()
     cat "${v_file1}"
     return 0
   fi
-  v_file1_cont=$(cat "${v_file1}")
-  v_file2_cont=$(cat "${v_file2}")
-  v_chk_array=$(echo "${v_file1_cont}" | ${v_jq} -r '.data | if type=="array" then "yes" else "no" end')
-  [ "${v_chk_array}" == "no" ] && v_file1_cont=$(echo "$v_file1_cont" | ${v_jq} '.data | {"data":[.]}')
-  v_chk_array=$(echo "${v_file2_cont}" | ${v_jq} -r '.data | if type=="array" then "yes" else "no" end')
-  [ "${v_chk_array}" == "no" ] && v_file2_cont=$(echo "$v_file2_cont" | ${v_jq} '.data | {"data":[.]}')
-  v_out=$(${v_jq} 'reduce inputs as $i (.; .data += $i.data)' <(echo "$v_file1_cont") <(echo "$v_file2_cont"))
-  ## Remove Duplicates
-  [ -z "$v_out" ] || v_out=$(echo "${v_out}" | ${v_jq} '.data | unique | {data : .}')
-  [ -z "$v_out" ] || echo "${v_out}"
+  v_chk_array=$(${v_jq} -r '.data | if type=="array" then "yes" else "no" end' "${v_file1}")
+  [ "${v_chk_array}" == "no" ] && { ${v_jq} '.data | {"data":[.]}' "${v_file1}" > "${v_file1}.tmp"; mv "${v_file1}.tmp" "${v_file1}"; }
+  v_chk_array=$(${v_jq} -r '.data | if type=="array" then "yes" else "no" end' "${v_file2}")
+  [ "${v_chk_array}" == "no" ] && { ${v_jq} '.data | {"data":[.]}' "${v_file2}" > "${v_file2}.tmp"; mv "${v_file2}.tmp" "${v_file2}"; }
+  ${v_jq} 'reduce inputs as $i (.; .data += $i.data)' "${v_file1}" "${v_file2}" > merge.json
+  if [ $MERGE_UNIQUE -eq 1 ]
+  then
+    ${v_jq} '.data | unique | {data : .}' merge.json
+  else
+    cat merge.json
+  fi
+  rm -f merge.json
+  return 0
 }
 
 v_json_files=""
@@ -134,7 +150,8 @@ do
     then
       if [ $i -ge 2 ]
       then
-        mergeJson "$((i-1)).json" "${i}.json" > "out.json"
+        mergeJson "$((i-1)).json" "${i}.json" > "out.json" && v_ret=$? || v_ret=$?
+        [ $v_ret -eq 0 ] || exitError "Can't merge ${v_json_files}"
         mv "out.json" "${i}.json"
         rm -f "$((i-1)).json"
       fi
@@ -145,7 +162,7 @@ do
   done
   ((--i))
   mv "${i}.json" "${v_json_file}"
-  zip -qmT "$v_output_zip" "${v_json_file}"
+  zip -qm -9 "$v_output_zip" "${v_json_file}"
 done
 
 exit 0
