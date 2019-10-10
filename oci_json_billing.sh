@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2019 by Rodrigo Jorge
-# Version 1.04
+# Version 1.05
 #************************************************************************
 set -eo pipefail
 
@@ -54,6 +54,8 @@ then
   >&2 echo "Script must be executed in BASH shell."
   exit 1
 fi
+
+trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
 function echoError ()
 {
@@ -867,7 +869,7 @@ function getFromHist ()
   [ "$#" -ne 1 ] && { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
   local v_arg1 v_line v_sep v_list v_file v_file_epoch v_now_epoch
   v_arg1="$1"
-  v_list="billing_hist_list.txt"
+  v_list="history_list.txt"
   v_sep="|"
   # grep -q "startTime=" <<< "${v_arg1}" || return 1
   # grep -q "endTime=" <<< "${v_arg1}" || return 1
@@ -901,7 +903,7 @@ function putOnHist ()
   local v_arg1 v_arg2 v_line v_sep v_list v_file v_last
   v_arg1="$1"
   v_arg2="$2"
-  v_list="billing_hist_list.txt"
+  v_list="history_list.txt"
   v_sep="|"
   [ -r "${v_hist_folder}/${v_list}" ] && v_line=$(grep -F "${v_arg1}${v_sep}" "${v_hist_folder}/${v_list}") || true
   if [ -z "${v_line}" ]
