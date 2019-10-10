@@ -10,6 +10,12 @@ Tool to export all your OCI metadata into JSON files.
 
 [https://www.dbarj.com.br/en/2018/10/howto-backup-oracle-cloud-infrastructure-metadata/](https://www.dbarj.com.br/en/2018/10/howto-backup-oracle-cloud-infrastructure-metadata/).
 
+### oci_json_billing.sh
+
+Tool to export all your OCI billing into JSON files.
+
+[https://www.dbarj.com.br/en/2019/10/how-to-export-all-your-oracle-cloud-infrastructure-billing-information/](https://www.dbarj.com.br/en/2019/10/how-to-export-all-your-oracle-cloud-infrastructure-billing-information/).
+
 ### oci_compute_instance_reshape.sh
 
 This script will automate all necessary tasks to change a compute instance shape.
