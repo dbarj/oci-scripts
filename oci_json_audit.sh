@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.05
+# Version 1.06
 #************************************************************************
 set -eo pipefail
 
@@ -61,6 +61,8 @@ then
   >&2 echo "Script must be executed in BASH shell."
   exit 1
 fi
+
+trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
 function echoError ()
 {
@@ -384,7 +386,10 @@ function jsonAudEvents ()
     if [ $v_ret -ne 0 ]
     then
       # Run
-      v_out=$(jsonAllCompart "${v_oci_audqry} --start-time "${v_next_date_start}Z" --end-time "${v_next_date_end}Z"" "${v_jq_filter}") && v_ret=$? || v_ret=$?
+      set +e
+      v_out=$(jsonAllCompart "${v_oci_audqry} --start-time "${v_next_date_start}Z" --end-time "${v_next_date_end}Z"" "${v_jq_filter}")
+      v_ret=$?
+      set -e
       [ $v_ret -ne 0 -a $v_ret -ne 20 ] && return $v_ret # Will only continue if return code is 0 or 20 (20=some compartment had an error)
       [ $v_ret -eq 0 ] && { (putOnHist "${v_search}" "${v_out}") || true ; }
     else
@@ -432,20 +437,24 @@ function jsonAllCompart ()
   set -eo pipefail # Exit if error in any call.
   set ${v_dbgflag} # Enable Debug
   [ "$#" -eq 2 -a "$1" != ""  -a "$2" != "" ] || { echoError "${FUNCNAME[0]} needs 2 parameters"; return 1; }
-  local v_arg1 v_arg2 v_out v_fout l_itens v_item v_ret
+  local v_arg1 v_arg2 v_out v_fout l_itens v_item v_ret v_ret_final
   v_arg1="$1" # Main oci call
   v_arg2="$2" # JQ Filter clause
 
-  v_ret=0 
+  v_ret_final=0 
   l_itens=$(IAM-Comparts | ${v_jq} -r '.data[].id')
 
   for v_item in $l_itens
   do
-    v_out=$(jsonSimple "${v_arg1} --compartment-id $v_item" "${v_arg2}") || v_ret=20 # Try next compartment if one fails and set return code to 20.
+    set +e
+    v_out=$(jsonSimple "${v_arg1} --compartment-id $v_item" "${v_arg2}")
+    v_ret=$?
+    set -e
+    [ $v_ret -ne 0 ] && v_ret_final=20 # Try next compartment if one fails and set return code to 20.
     v_fout=$(jsonConcatData "$v_fout" "$v_out")
   done
   [ -z "$v_fout" ] || echo "${v_fout}"
-  return ${v_ret}
+  return ${v_ret_final}
 }
 
 function jsonSimple ()
@@ -706,7 +715,7 @@ function uncompressHist ()
     mkdir  ${v_hist_folder}
     if [ -r "${HIST_ZIP_FILE}" ]
     then
-      unzip -d ${v_hist_folder} "${HIST_ZIP_FILE}" >/dev/null
+      unzip -q -d ${v_hist_folder} "${HIST_ZIP_FILE}"
     fi
   fi
   return 0
@@ -740,7 +749,7 @@ function getFromHist ()
   [ "$#" -ne 1 ] && { echoError "${FUNCNAME[0]} needs 1 parameter"; return 1; }
   local v_arg1 v_line v_sep v_list v_file v_file_epoch v_now_epoch
   v_arg1="$1"
-  v_list="audit_hist_list.txt"
+  v_list="history_list.txt"
   v_sep="|"
   # grep -q "startTime=" <<< "${v_arg1}" || return 1
   # grep -q "endTime=" <<< "${v_arg1}" || return 1
@@ -774,7 +783,7 @@ function putOnHist ()
   local v_arg1 v_arg2 v_line v_sep v_list v_file v_last
   v_arg1="$1"
   v_arg2="$2"
-  v_list="audit_hist_list.txt"
+  v_list="history_list.txt"
   v_sep="|"
   [ -r "${v_hist_folder}/${v_list}" ] && v_line=$(grep -F "${v_arg1}${v_sep}" "${v_hist_folder}/${v_list}") || true
   if [ -z "${v_line}" ]
@@ -795,8 +804,8 @@ function putOnHist ()
     [ ! -r "${v_hist_folder}/${v_file}" ] && return 1
     echo "${v_arg2}" > "${v_hist_folder}/${v_file}"
   fi
-  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}" >/dev/null
-  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}" >/dev/null
+  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}"
+  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}"
   return 0
 }
 
