@@ -2,7 +2,7 @@
 #************************************************************************
 #
 #   oci_json_billing.sh - Export all Oracle Cloud Billing
-#   metadata information into JSON files.
+#   information from OCI into JSON files.
 #
 #   Copyright 2019  Rodrigo Jorge <http://www.dbarj.com.br/>
 #
@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2019 by Rodrigo Jorge
-# Version 1.05
+# Version 1.06
 #************************************************************************
 set -eo pipefail
 
@@ -839,7 +839,7 @@ function uncompressHist ()
     mkdir  ${v_hist_folder}
     if [ -r "${HIST_ZIP_FILE}" ]
     then
-      unzip -d ${v_hist_folder} "${HIST_ZIP_FILE}" >/dev/null
+      unzip -q -d ${v_hist_folder} "${HIST_ZIP_FILE}"
     fi
   fi
   return 0
@@ -924,8 +924,8 @@ function putOnHist ()
     [ ! -r "${v_hist_folder}/${v_file}" ] && return 1
     echo "${v_arg2}" > "${v_hist_folder}/${v_file}"
   fi
-  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}" >/dev/null
-  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}" >/dev/null
+  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}"
+  ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}"
   return 0
 }
 
