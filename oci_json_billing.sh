@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2019 by Rodrigo Jorge
-# Version 1.06
+# Version 1.07
 #************************************************************************
 set -eo pipefail
 
@@ -35,8 +35,9 @@ v_curl_timeout=600 # Seconds
 # Default period in days to collect info, if omitted on parameters
 v_def_period=90
 
+[[ "${TMPDIR}" == "" ]] && TMPDIR='/tmp/'
 # Temporary Folder. Used to stage some repetitive jsons and save time. Empty to disable (not recommended).
-v_tmpfldr="$(mktemp -d -u -p /tmp/.oci 2>&- || mktemp -d -u)"
+v_tmpfldr="$(mktemp -d -u -p ${TMPDIR}/.oci 2>&- || mktemp -d -u)"
 
 # Export DEBUG=1 to see the steps being executed.
 [[ "${DEBUG}" == "" ]] && DEBUG=0
@@ -821,7 +822,6 @@ function runAndZip ()
   else
     rm -f "${v_arg2}"
   fi
-  echo "$v_arg2" >> "${v_listfile}"
 }
 
 function cleanTmpFiles ()
@@ -947,15 +947,12 @@ function main ()
     set -e
   else
     [ -n "$v_outfile" ] || v_outfile="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S').zip"
-    v_listfile="${v_this_script%.*}_list.txt"
-    rm -f "${v_listfile}"
     while read -u 3 -r c_line || [ -n "$c_line" ]
     do
        c_name=$(cut -d ',' -f 1 <<< "$c_line")
        c_file=$(cut -d ',' -f 2 <<< "$c_line")
        runAndZip $c_name $c_file
     done 3< <(echo "$v_func_list")
-    ${v_zip} -qm "$v_outfile" "${v_listfile}"
     v_ret=0
   fi
   cleanHist
