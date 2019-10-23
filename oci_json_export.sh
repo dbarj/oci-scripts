@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.19
+# Version 1.20
 #************************************************************************
 set -e
 
@@ -39,11 +39,20 @@ v_min_ocicli="2.4.34"
 # Timeout for OCI-CLI calls
 v_oci_timeout=600 # Seconds
 
+[[ "${TMPDIR}" == "" ]] && TMPDIR='/tmp/'
 # Temporary Folder. Used to stage some repetitive jsons and save time. Empty to disable.
-v_tmpfldr="$(mktemp -d -u -p /tmp/.oci 2>&- || mktemp -d -u)"
+v_tmpfldr="$(mktemp -d -u -p ${TMPDIR}/.oci 2>&- || mktemp -d -u)"
 
 # If DEBUG variable is undefined, change to 0.
 [[ "${DEBUG}" == "" ]] && DEBUG=0
+
+if [ -z "${BASH_VERSION}" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
+
+trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
 function echoError ()
 {
@@ -134,6 +143,8 @@ then
     exit 1
   fi
 fi
+
+v_zip="zip -9"
 
 v_cur_ocicli=$(${v_oci} -v)
 
@@ -560,6 +571,7 @@ function jsonConcat ()
 # DB-System,oci_db_system.json,jsonAllCompart,"db system list --all"
 # DB-SystemShape,oci_db_system-shape.json,jsonGenericMasterAdd,"db system-shape list --all" "IAM-ADs" "name:availability-domain:availability-domain" "jsonAllCompartAddTag"
 # DB-Version,oci_db_version.json,jsonAllCompartAddTag,"db version list --all"
+# DB-ExaInfra,oci_db_exadata-infrastructure.json,jsonAllCompart,"db exadata-infrastructure list --all"
 # DNS-Zones,oci_dns_zone.json,jsonAllCompart,"dns zone list --all"
 # Email-Senders,oci_email_sender.json,jsonAllCompart,"email sender list --all"
 # Email-Supps,oci_email_suppression.json,jsonGenericMaster,"email suppression list --all" "IAM-Comparts" "compartment-id:compartment-id" "jsonSimple"
@@ -660,10 +672,10 @@ do
           {
             stopIfProcessed ${c_fname} || return 0
             set +e
-            (${c_subfunc} ${c_param} > ${v_tmpfldr}/.${c_fname})
+            (${c_subfunc} ${c_param} > \${v_tmpfldr}/.${c_fname})
             c_ret=\$?
             set -e
-            cat ${v_tmpfldr}/.${c_fname}
+            cat \${v_tmpfldr}/.${c_fname}
             return \${c_ret}
           }"
   fi
@@ -689,7 +701,7 @@ function runAndZip ()
   local v_arg1 v_arg2 v_ret
   v_arg1="$1"
   v_arg2="$2"
-  echo "Processing \"${v_arg2}\"."
+  [ -z "${v_region}" ] && echo "Processing \"${v_arg2}\"." || echo "Processing \"${v_arg2}\" in ${v_region}."
   set +e
   (${v_arg1} > "${v_arg2}" 2> "${v_arg2}.err")
   v_ret=$?
@@ -699,75 +711,86 @@ function runAndZip ()
     if [ -s "${v_arg2}.err" ]
     then
       mv "${v_arg2}.err" "${v_arg2}.log"
-      zip -qmT "$v_outfile" "${v_arg2}.log"
+      ${v_zip} -qm "$v_outfile" "${v_arg2}.log"
     fi
   else
     if [ -f "${v_arg2}.err" ]
     then
       echo "Skipped. Check \"${v_arg2}.err\" for more details."
-      zip -qmT "$v_outfile" "${v_arg2}.err"
+      ${v_zip} -qm "$v_outfile" "${v_arg2}.err"
     fi
   fi
   [ ! -f "${v_arg2}.err" ] || rm -f "${v_arg2}.err"
   if [ -s "${v_arg2}" ]
   then
-    zip -qmT "$v_outfile" "${v_arg2}"
+    ${v_zip} -qm "$v_outfile" "${v_arg2}"
   else
     rm -f "${v_arg2}"
   fi
-  echo "$v_arg2" >> "${v_listfile}"
 }
 
 function cleanTmpFiles ()
 {
-  [ -z "${v_tmpfldr}" ] || rm -f "${v_tmpfldr}"/.*.json 2>&- || true
+  [ -n "${v_tmpfldr}" ] && rm -f "${v_tmpfldr}"/.*.json 2>&- || true
+  return 0
 }
 
 function main ()
 {
   # If ALL or ALL_REGIONS, loop over all defined options.
   local c_line c_name c_file
-  cleanTmpFiles
   if [ "${v_param1}" != "ALL" -a "${v_param1}" != "ALL_REGIONS" ]
   then
     ${v_param1} && v_ret=$? || v_ret=$?
   else
     [ -n "$v_outfile" ] || v_outfile="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S').zip"
-    v_listfile="${v_this_script%.*}_list.txt"
-    rm -f "${v_listfile}"
     while read -u 3 -r c_line || [ -n "$c_line" ]
     do
        c_name=$(cut -d ',' -f 1 <<< "$c_line")
        c_file=$(cut -d ',' -f 2 <<< "$c_line")
        runAndZip $c_name $c_file
     done 3< <(echo "$v_func_list")
-    zip -qmT "$v_outfile" "${v_listfile}"
     v_ret=0
   fi
-  cleanTmpFiles
 }
 
 # Start code execution. If ALL_REGIONS, call main for each region.
 echoDebug "BEGIN"
+cleanTmpFiles
 if [ "${v_param1}" == "ALL_REGIONS" ]
 then
   l_regions=$(IAM-RegionSub | ${v_jq} -r '.data[]."region-name"')
   v_oci_orig="$v_oci"
+  v_tmpfldr_base="${v_tmpfldr}"
   v_outfile_pref="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S')"
   for v_region in $l_regions
   do
-    echo "########################"
-    echo "Region ${v_region} set."
+    echo "Starting region ${v_region}."
     v_oci="${v_oci_orig} --region ${v_region}"
     v_outfile="${v_outfile_pref}_${v_region}.zip"
-    main
+    [ -n "${v_tmpfldr_base}" ] && { v_tmpfldr="${v_tmpfldr_base}/${v_region}"; mkdir "${v_tmpfldr}"; }
+    mkdir ${v_region} 2>&- || true
+    cd ${v_region}
+    main &
+    v_pids+=(${v_region}::$!)
+    cd ..
   done
+  for v_reg_ind in "${v_pids[@]}"
+  do
+      v_region="${v_reg_ind%%::*}"
+      wait ${v_reg_ind##*::}
+      mv ${v_region}/* ./
+      rmdir ${v_region}
+      [ -n "${v_tmpfldr_base}" ] && { v_tmpfldr="${v_tmpfldr_base}/${v_region}"; cleanTmpFiles; rmdir "${v_tmpfldr}"; }
+  done
+  v_tmpfldr="${v_tmpfldr_base}"
 else
   main
 fi
+cleanTmpFiles
 echoDebug "END"
 
-[ -z "${v_tmpfldr}" ] || rmdir ${v_tmpfldr} 2>&- || true
+[ -n "${v_tmpfldr}" ] && rmdir "${v_tmpfldr}" 2>&- || true
 
 exit ${v_ret}
 ###
