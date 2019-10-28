@@ -21,19 +21,18 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.03
+# Version 1.04
 #************************************************************************
-set -e
+set -eo pipefail
 
 [ -n "${v_step}" ] || v_step=1
 
 read -r -d '' v_all_steps << EOM || true
-## Macro Steps
-# $(printf "%02d\n" $((v_step+0))) - Export the Image.
-# $(printf "%02d\n" $((v_step+1))) - Create Pre-Auth URL.
-# $(printf "%02d\n" $((v_step+2))) - Import the Image in target region.
-# $(printf "%02d\n" $((v_step+3))) - Remove exported Image object.
-# $(printf "%02d\n" $((v_step+4))) - Remove Pre-Auth URL.
+$(printf "%02d\n" $((v_step+0))) - Export the Image.
+$(printf "%02d\n" $((v_step+1))) - Create Pre-Auth URL.
+$(printf "%02d\n" $((v_step+2))) - Import the Image in target region.
+$(printf "%02d\n" $((v_step+3))) - Remove exported Image object.
+$(printf "%02d\n" $((v_step+4))) - Remove Pre-Auth URL.
 EOM
 
 ####
@@ -48,11 +47,26 @@ v_orig_region=""
 v_oci="oci"
 v_jq="jq"
 
-# Add any desired oci argument. Keep default to avoid oci_cli_rc usage (recommended).
-v_oci_args="--cli-rc-file /dev/null"
+# Add any desired oci argument exporting OCI_CLI_ARGS. Keep default to avoid oci_cli_rc usage.
+[ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
+[ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
+
+if [ -z "${BASH_VERSION}" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
+
+v_this_script="$(basename -- "$0")"
+
+# If DEBUG variable is undefined, change to 1. Note that [-q] parameter will override this option to 0.
+[[ "${DEBUG}" == "" ]] && DEBUG=1
+# 0 = Only basic echo.
+# 1 = Show OCI-CLI steps commands.
+# 2 = Show ALL OCI-CLI commands. (TODO)
 
 # Don't change it.
-v_min_ocicli="2.4.30"
+v_min_ocicli="2.6.9"
 
 function echoError ()
 {
@@ -61,19 +75,23 @@ function echoError ()
 
 function echoStatus ()
 {
+  local RED='\033[0;31m'
   local GREEN='\033[0;32m'
   local BOLD='\033[0;1m'
   local NC='\033[0m' # No Color
   local TYPE="$GREEN"
   [ "$2" == "GREEN" ] && TYPE="$GREEN"
+  [ "$2" == "RED" ] && TYPE="$RED"
   [ "$2" == "BOLD" ] && TYPE="$BOLD"
   printf "${TYPE}${1}${NC}\n"
 }
 
 function exitError ()
 {
-  echoError "$1"
-  exit 1
+   local v_filename="${v_this_script%.*}.log"
+   echoError "$1"
+   ( set -o posix ; set ) > "${v_filename}"
+   exit 1
 }
 
 function checkError ()
@@ -82,7 +100,7 @@ function checkError ()
   # - If 1st is NULL, abort script printing 2nd.
   # If 3 params given:
   # - If 1st is NULL, abort script printing 3rd.
-  # - If 2nf is not 0, abort script printing 3rd.
+  # - If 2nd is not 0, abort script printing 3rd.
   local v_arg1 v_arg2 v_arg3
   v_arg1="$1"
   v_arg2="$2"
@@ -90,40 +108,66 @@ function checkError ()
   [ "$#" -ne 2 -a "$#" -ne 3 ] && exitError "checkError wrong usage."
   [ "$#" -eq 2 -a -z "${v_arg2}" ] && exitError "checkError wrong usage."
   [ "$#" -eq 3 -a -z "${v_arg3}" ] && exitError "checkError wrong usage."
-  [ "$#" -eq 2 ] && [ -z "${v_arg1}" ] && exitError "${v_arg2}"
-  [ "$#" -eq 3 ] && [ -z "${v_arg1}" ] && exitError "${v_arg3}"
-  [ "$#" -eq 3 ] && [ "${v_arg2}" != "0" ] && exitError "${v_arg3}"
+  [ "$#" -eq 2 ] && [ -z "${v_arg1}" ] && echoStatus "${v_arg2}" "RED" && exit 1
+  [ "$#" -eq 3 ] && [ -z "${v_arg1}" ] && echoStatus "${v_arg3}" "RED" && exit 1
+  [ "$#" -eq 3 ] && [ "${v_arg2}" != "0" ] && echoStatus "${v_arg3}" "RED" && exit 1
   return 0
 }
 
 [ -n "$v_os_bucket" ] && v_param_os_bucket="(Optional)"
 [ -n "$v_target_region" ] && v_param_target_region="(Optional)"
 
-v_image_name="$1"
-[ -n "$2" ] && v_os_bucket="$2"
-[ -n "$3" ] && v_target_region="$3"
-[ -n "$4" ] && v_orig_region="$4"
+function printUsage ()
+{
+  echoError "Usage: ${v_this_script} -i <value> -b <value> -t <value> -s <value> [-q]"
+  echoError ""
+  echoError "-i    : Image Name or OCID"
+  echoError "-b    : Object Storage Bucket ${v_param_os_bucket}"
+  echoError "-t    : Target Region ${v_param_target_region}"
+  echoError "-s    : Source Region"
+  echoError "-q    : Quiet mode. Will suppress the spool of executed OCI-CLI commands."
+  echoError ""
+  echoError "Steps: "
+  echoError ""
+  echoError "${v_all_steps}"
+  exit 1
+}
 
-read -r -d '' v_help << EOM || true
-$0:
-- 1st param = Image Name or OCID
-- 2nd param = Object Storage Bucket ${v_param_os_bucket}
-- 3rd param = Target Region ${v_param_target_region}
-- 4th param = Source Region (Optional)
-EOM
+while getopts ":i:b:t:s:q" opt
+do
+    case "${opt}" in
+        i)
+            v_image_name=${OPTARG}
+            ;;
+        b)
+            v_os_bucket=${OPTARG}
+            ;;
+        t)
+            v_target_region=${OPTARG}
+            ;;
+        s)
+            v_orig_region=${OPTARG}
+            ;;
+        q)
+            DEBUG=0
+            ;;
+        *)
+            printUsage	
+            ;;
+    esac
+done
+shift $((OPTIND-1))
 
-[ "${v_image_name:0:1}" == "-" -o "${v_image_name}" == "help" -o "$#" -eq 0 ] && exitError "${v_help}"
-[ -z "$v_image_name" ] && exitError "${v_help}"
+[ -z "$v_image_name" ] && printUsage
 
 if [ -z "$v_os_bucket" ]
 then
-  echoError "${v_help}"
   echoError "A pre-created object storage bucket is required for image migration across regions."
-  echoError "Create one and pass it as 2nd parameter or define the variable v_os_bucket inside the script."
+  echoError "Create one and pass it as argument."
   exit 1
 fi
 
-[ -z "$v_target_region" ] && exitError "${v_help}"
+[ -z "$v_target_region" ] && printUsage
 
 if ! $(which ${v_oci} >&- 2>&-)
 then
@@ -163,11 +207,15 @@ function getOrigRegion ()
 {
   local v_file v_region
   v_file=~/.oci/config
-  if $(echo "$v_oci_args" | grep -q -- '--config-file')
+  if $(echo "$v_oci_args" | grep -q -i -- '--config-file')
   then
     exitError "Please specify Source Region parameter."
   fi
-  v_region=$(cat "${v_file}" | grep "region=" | sed 's/region=//')
+  if $(echo "$v_oci_args" | grep -q -i -- '--profile')
+  then
+    exitError "Please specify Source Region parameter."
+  fi
+  v_region=$(awk '/DEFAULT/{x=1}x&&/region/{print;exit}' "${v_file}" | sed 's/region=//')
   [ ! -r "${v_file}" ] && exitError "Could not read OCI config file."
   if [ -n "${v_region}" ]
   then
@@ -195,12 +243,13 @@ fi
 v_os_ns=$(${v_oci} os ns get | ${v_jq} -rc '."data"') && v_ret=$? || v_ret=$?
 checkError "$v_os_ns" "$v_ret" "Could not get the namespace for this tenancy."
 
-v_os_bucketJson=$(${v_oci} os bucket get --bucket-name ${v_os_bucket} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
-checkError "${v_os_bucketJson}" "$v_ret" "Could not find bucket \"${v_os_bucket}\"."
+# New version is not using public OS Buckets to move anymore.
+# v_os_bucketJson=$(${v_oci} os bucket get --bucket-name ${v_os_bucket} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+# checkError "${v_os_bucketJson}" "$v_ret" "Could not find bucket \"${v_os_bucket}\"."
 
-v_os_bucketPublic=$(echo "${v_os_bucketJson}" | ${v_jq} -rc '."public-access-type"')
-checkError "${v_os_bucketPublic}" "Can't get Bucket public attribute."
-[ "${v_os_bucketPublic}" == "NoPublicAccess" ] && exitError "OS Bucket must have Public ObjectRead Access enabled."
+# v_os_bucketPublic=$(echo "${v_os_bucketJson}" | ${v_jq} -rc '."public-access-type"')
+# checkError "${v_os_bucketPublic}" "Can't get Bucket public attribute."
+# [ "${v_os_bucketPublic}" == "NoPublicAccess" ] && exitError "OS Bucket must have Public ObjectRead Access enabled."
 
 if [ "${v_image_name:0:15}" == "ocid1.image.oc1" ]
 then
@@ -232,13 +281,18 @@ fi
 
 #### Collect Information
 
-v_jsonImage=$(${v_oci} compute image get --image-id "${v_image_ID}" | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
-checkError "$v_jsonImage" "$v_ret" "Could not get json for image ${v_image_name}"
+v_orig_imageJson=$(${v_oci} compute image get --image-id "${v_image_ID}" | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+checkError "$v_orig_imageJson" "$v_ret" "Could not get json for image ${v_image_name}"
 
-v_compartment_id=$(echo "$v_jsonImage" | ${v_jq} -rc '."compartment-id"') && v_ret=$? || v_ret=$?
+v_compartment_id=$(echo "$v_orig_imageJson" | ${v_jq} -rc '."compartment-id"') && v_ret=$? || v_ret=$?
 checkError "$v_compartment_id" "$v_ret" "Could not get the image Compartment ID."
 
 v_compartment_arg="--compartment-id ${v_compartment_id}"
+
+v_orig_OS=$(echo "$v_orig_imageJson" | ${v_jq} -rc '."operating-system"')
+checkError "$v_orig_OS" "Could not get Image OS."
+[ "${v_orig_OS}" == "Windows" ] && exitError "Cloning Oracle Windows based compute instances is not yet supported by OCI-CLI."
+
 
 printStep ()
 {
@@ -246,6 +300,8 @@ printStep ()
   ((v_step++))
 }
 
+[ "${v_step}" -eq 1 ] && echoStatus "Starting execution."
+echo "Steps:"
 echo "$v_all_steps"
 
 ######
@@ -262,7 +318,9 @@ v_params+=(--namespace "${v_os_ns}")
 v_params+=(--bucket-name "${v_os_bucket}")
 v_params+=(--name "${v_os_name}")
 
+(( $DEBUG )) && set -x
 v_jsonImageExport=$(${v_oci} compute image export to-object "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_jsonImageExport" "$v_ret" "Could not export Image."
 
 while true
@@ -270,7 +328,8 @@ do
   v_jsonImage=$(${v_oci} compute image get --image-id ${v_image_ID}) && v_ret=$? || v_ret=$?
   checkError "$v_jsonImage" "$v_ret" "Could not get Image status."
   v_imageStatus=$(echo "$v_jsonImage" | ${v_jq} -rc '.data."lifecycle-state"')
-  [ "${v_imageStatus}" != "AVAILABLE" ] || break
+  [ "${v_imageStatus}" == "AVAILABLE" ] && break
+  [ "${v_imageStatus}" == "DELETED" ] && exitError "Image Status is DELETED."
   echo "Image status is ${v_imageStatus}. Please wait."
   sleep 180
 done
@@ -297,7 +356,9 @@ v_params+=(--name "${v_preauth_name}")
 v_params+=(--access-type "ObjectRead")
 v_params+=(--time-expires ${v_preauth_expire})
 
+(( $DEBUG )) && set -x
 v_jsonPreAuthReq=$(${v_oci} os preauth-request create "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_jsonPreAuthReq" "$v_ret" "Could not create preauth-request."
 
 v_preAuthID=$(echo "$v_jsonPreAuthReq" | ${v_jq} -rc '.data."id"')
@@ -314,16 +375,19 @@ setRetion "${v_target_region}"
 v_preAuthFullURI="https://objectstorage.${v_orig_region}.oraclecloud.com${v_preAuthURI}"
 
 v_freeFormTags='{"Source_OCID":"'${v_image_ID}'"}'
+v_launchMode=$(echo "$v_orig_imageJson" | ${v_jq} -rc '."launch-mode"')
 
 v_params=()
 v_params+=(${v_compartment_arg})
 v_params+=(--display-name ${v_image_name})
-v_params+=(--launch-mode NATIVE)
+v_params+=(--launch-mode ${v_launchMode})
 v_params+=(--source-image-type QCOW2)
 v_params+=(--uri "${v_preAuthFullURI}")
 v_params+=(--freeform-tags "${v_freeFormTags}")
 
+(( $DEBUG )) && set -x
 v_jsonImageImport=$(${v_oci} compute image import from-object-uri "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_jsonImageImport" "$v_ret" "Could not import Image."
 
 v_imageTargetID=$(echo "$v_jsonImageImport" | ${v_jq} -rc '.data."id"') && v_ret=$? || v_ret=$?
@@ -334,7 +398,8 @@ do
   v_jsonImage=$(${v_oci} compute image get --image-id ${v_imageTargetID}) && v_ret=$? || v_ret=$?
   checkError "$v_jsonImage" "$v_ret" "Could not get Image status."
   v_imageStatus=$(echo "$v_jsonImage" | ${v_jq} -rc '.data."lifecycle-state"')
-  [ "${v_imageStatus}" != "AVAILABLE" ] || break
+  [ "${v_imageStatus}" == "AVAILABLE" ] && break
+  [ "${v_imageStatus}" == "DELETED" ] && exitError "Image Status is DELETED."
   echo "Image status is ${v_imageStatus}. Please wait."
   sleep 180
 done
@@ -353,7 +418,9 @@ v_params+=(--bucket-name "${v_os_bucket}")
 v_params+=(--object-name "${v_os_name}")
 v_params+=(--force)
 
+(( $DEBUG )) && set -x
 ${v_oci} os object delete "${v_params[@]}" && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "x" "$v_ret" "Could not delete object."
 
 ######
@@ -368,7 +435,9 @@ v_params+=(--bucket-name "${v_os_bucket}")
 v_params+=(--par-id "${v_preAuthID}")
 v_params+=(--force)
 
+(( $DEBUG )) && set -x
 ${v_oci} os preauth-request delete "${v_params[@]}" && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "x" "$v_ret" "Could not delete preauth-request."
 
 ######
