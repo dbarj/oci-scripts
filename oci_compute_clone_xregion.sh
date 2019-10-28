@@ -20,19 +20,27 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Nov/2018 by Rodrigo Jorge
-# Version 1.10
+# Version 1.11
 #************************************************************************
-set -e
+set -eo pipefail
 
 # Define paths for oci-cli and jq or put them on $PATH. Don't use relative PATHs in the variables below.
 v_oci="oci"
 v_jq="jq"
 
-# Add any desired oci argument. Keep default to avoid oci_cli_rc usage (recommended).
-v_oci_args="--cli-rc-file /dev/null"
-
 # Don't change it.
-v_min_ocicli="2.4.40"
+v_min_ocicli="2.6.9"
+v_oci_image_clone_script="oci_image_clone_xregion.sh"
+
+# Add any desired oci argument exporting OCI_CLI_ARGS. Keep default to avoid oci_cli_rc usage.
+[ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
+[ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
+
+# If DEBUG variable is undefined, change to 1. Note that [-q] parameter will override this option to 0.
+[[ "${DEBUG}" == "" ]] && DEBUG=1
+# 0 = Only basic echo.
+# 1 = Show OCI-CLI steps commands.
+# 2 = Show ALL OCI-CLI commands. (TODO)
 
 ####
 #### INTERNAL - IF NOT PROVIDED HERE OR AS PARAMETERS, WILL BE ASKED DURING CODE EXECUTION.
@@ -45,29 +53,35 @@ v_target_IP=""
 v_target_shape=""
 v_os_bucketName=""
 v_sedrep_rule_target_name=""
-v_script_ask="yes"
 ####
 
+if [ -z "${BASH_VERSION}" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
+
+v_this_script="$(basename -- "$0")"
+
 read -r -d '' v_all_steps << EOM || true
-## Macro Steps
-# 01 - Create Volume Group with instance Boot-Volume and Volumes.
-# 02 - Backup Volume Group.
-# 03 - Remove Volume Group.
-# 04 - Create a New Boot-Volume from the Backup.
-# 05 - Create a Temporary cloned Compute Instance from the Boot Volume.
-# 06 - Stop the Temporary cloned Compute Instance.
-# 07 - Create an Image from it.
-# 08 - Remove the Temporary cloned Compute Instance and Boot-Volume.
-# 09-13 - Move the image from source to target.
-# 14 - Remove Image on source region.
-# 15 - Create a Compute Instance from Image on target region.
-# 16 - Remove Image on target region.
-# 17 - Move Volumes Backups from Source Region to Target Region.
-# 18 - Remove Volumes Backups in Source Region.
-# 19 - Create Volumes from backups in Target Region.
-# 20 - Remove Volumes Backups in Target Region.
-# 21 - Attach Volumes in target.
-# 22 - Run iscsiadm commands (if Linux).
+01 - Create Volume Group with instance Boot-Volume and Volumes.
+02 - Backup Volume Group.
+03 - Remove Volume Group.
+04 - Create a New Boot-Volume from the Backup.
+05 - Create a Temporary cloned Compute Instance from the Boot Volume.
+06 - Stop the Temporary cloned Compute Instance.
+07 - Create an Image from it.
+08 - Remove the Temporary cloned Compute Instance and Boot-Volume.
+09-13 - Move the image from source to target (${v_oci_image_clone_script}).
+14 - Remove Image on source region.
+15 - Create a Compute Instance from Image on target region.
+16 - Remove Image on target region.
+17 - Move Volumes Backups from Source Region to Target Region.
+18 - Remove Volumes Backups in Source Region.
+19 - Create Volumes from backups in Target Region.
+20 - Remove Volumes Backups in Target Region.
+21 - Attach Volumes in target.
+22 - Run iscsiadm commands on target (if Linux).
 EOM
 
 function echoError ()
@@ -77,19 +91,22 @@ function echoError ()
 
 function echoStatus ()
 {
+  local RED='\033[0;31m'
   local GREEN='\033[0;32m'
   local BOLD='\033[0;1m'
   local NC='\033[0m' # No Color
   local TYPE="$GREEN"
   [ "$2" == "GREEN" ] && TYPE="$GREEN"
   [ "$2" == "BOLD" ] && TYPE="$BOLD"
+  [ "$2" == "RED" ] && TYPE="$RED"
   printf "${TYPE}${1}${NC}\n"
 }
 
 function exitError ()
 {
+   local v_filename="${v_this_script%.*}.log"
    echoError "$1"
-   ( set -o posix ; set ) > /tmp/oci_debug.$(date '+%Y%m%d%H%M%S').txt
+   ( set -o posix ; set ) > "${v_filename}"
    exit 1
 }
 
@@ -99,7 +116,7 @@ function checkError ()
   # - If 1st is NULL, abort script printing 2nd.
   # If 3 params given:
   # - If 1st is NULL, abort script printing 3rd.
-  # - If 2nf is not 0, abort script printing 3rd.
+  # - If 2nd is not 0, abort script printing 3rd.
   local v_arg1 v_arg2 v_arg3
   v_arg1="$1"
   v_arg2="$2"
@@ -107,41 +124,84 @@ function checkError ()
   [ "$#" -ne 2 -a "$#" -ne 3 ] && exitError "checkError wrong usage."
   [ "$#" -eq 2 -a -z "${v_arg2}" ] && exitError "checkError wrong usage."
   [ "$#" -eq 3 -a -z "${v_arg3}" ] && exitError "checkError wrong usage."
-  [ "$#" -eq 2 ] && [ -z "${v_arg1}" ] && exitError "${v_arg2}"
-  [ "$#" -eq 3 ] && [ -z "${v_arg1}" ] && exitError "${v_arg3}"
-  [ "$#" -eq 3 ] && [ "${v_arg2}" != "0" ] && exitError "${v_arg3}"
+  [ "$#" -eq 2 ] && [ -z "${v_arg1}" ] && echoStatus "${v_arg2}" "RED" && exit 1
+  [ "$#" -eq 3 ] && [ -z "${v_arg1}" ] && echoStatus "${v_arg3}" "RED" && exit 1
+  [ "$#" -eq 3 ] && [ "${v_arg2}" != "0" ] && echoStatus "${v_arg3}" "RED" && exit 1
   return 0
 }
 
 # trap
 trap 'exitError "Code Interrupted."' INT SIGINT SIGTERM
 
-v_orig_instName="$1"
-[ -n "$2" ] && v_target_instName="$2"
-[ -n "$3" ] && v_target_shape="$3"
-[ -n "$4" ] && v_target_subnetID="$4"
-[ -n "$5" ] && v_target_IP="$5"
-[ -n "$6" ] && v_target_region="$6"
-[ -n "$7" ] && v_orig_region="$7"
-[ -n "$8" ] && v_os_bucketName="$8"
-[ -n "$9" ] && v_clone_subnetID="$9"
-
-if [ "${v_orig_instName:0:1}" == "-" -o "${v_orig_instName}" == "help" -o "$#" -eq 0 ]
-then
-  echoError "$0: All parameters, except first, are optional to run this tool."
-  echoError "- 1st param = Source Compute Instance Name or OCID"
-  echoError "- 2nd param = Target Compute Instance Name"
-  echoError "- 3rd param = Target Compute Shape"
-  echoError "- 4th param = Target Subnet ID"
-  echoError "- 5th param = Target IP Address"
-  echoError "- 6th param = Target Region"
-  echoError "- 7th param = Source Region"
-  echoError "- 8th param = Object Storage Bucket Name"
-  echoError "- 9th param = Clone Subnet ID"
+function printUsage ()
+{
+  echoError "Usage: ${v_this_script} -i <value> [-n <value>] [-p <value>] [-s <value>] [-a <value>] [-t <value>] [-r <value>] [-b <value>] [-c <value>] [-q] [-x]"
+  echoError ""
+  echoError "Only \"-i\" is mandatory. All other parameters if omitted will be asked during execution."
+  echoError ""
+  echoError "-i  : Source Compute Instance Name or OCID"
+  echoError "-n  : Target Compute Instance Name"
+  echoError "-p  : Target Compute Shape"
+  echoError "-s  : Target Subnet ID"
+  echoError "-a  : Target IP Address"
+  echoError "-t  : Target Region"
+  echoError "-r  : Source Region"
+  echoError "-b  : Object Storage Bucket Name"
+  echoError "-c  : Clone Subnet ID"
+  echoError "-h  : Show this output."
+  echoError "-q  : Quiet mode. Will suppress the spool of executed OCI-CLI commands."
+  echoError "-x  : Will try to run step 22 automatically on new target. Default is off. Note you need a password-less SSH connection to the target with opc."
+  echoError ""
+  echoError "Steps: "
+  echoError ""
+  echoError "${v_all_steps}"
   exit 1
-fi
+}
 
-[ -n "$v_orig_instName" ] || exitError "Intance Name or OCID can't be null."
+while getopts ":i:n:p:s:a:t:r:b:c:qx" opt
+do
+    case "${opt}" in
+        i)
+            v_orig_instName=${OPTARG}
+            ;;
+        n)
+            v_target_instName=${OPTARG}
+            ;;
+        p)
+            v_target_shape=${OPTARG}
+            ;;
+        s)
+            v_target_subnetID=${OPTARG}
+            ;;
+        a)
+            v_target_IP=${OPTARG}
+            ;;
+        t)
+            v_target_region=${OPTARG}
+            ;;
+        r)
+            v_orig_region=${OPTARG}
+            ;;
+        b)
+            v_os_bucketName=${OPTARG}
+            ;;
+        c)
+            v_clone_subnetID=${OPTARG}
+            ;;
+        x)
+            v_skip_ssh=0
+            ;;
+        q)
+            DEBUG=0
+            ;;
+        *)
+            printUsage	
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+[ -z "$v_orig_instName" ] && printUsage
 
 if ! $(which ${v_oci} >&- 2>&-)
 then
@@ -155,18 +215,12 @@ then
   exitError "Download page: https://github.com/stedolan/jq/releases"
 fi
 
-v_oci_image_clone_script="oci_image_clone_xregion.sh"
 v_workdir=$(cd -P -- "$(dirname -- "$(command -v -- "$0")")" && pwd -P) # Folder of this script
 if ! $(which "${v_workdir}"/${v_oci_image_clone_script} >&- 2>&-)
 then
-  echoError "This shells also use \"${v_oci_image_clone_script}\" to deal with the image migration task."
-  echoError "Could not find \"${v_oci_image_clone_script}\". Please keep it in current folder."
+  echoError "This shells also use \"${v_oci_image_clone_script}\" to handle the image migration task."
+  echoError "Could not find \"${v_oci_image_clone_script}\". Please keep it in same folder of ${v_this_script}."
   exitError "Download page: https://github.com/dbarj/oci-scripts"
-fi
-
-if [ "${v_script_ask}" != "yes" -a "${v_script_ask}" != "no" ]
-then
-  exitError "Valid values for \"\$v_script_ask\" are \"yes\" or \"no\"."
 fi
 
 v_cur_ocicli=$(${v_oci} -v)
@@ -187,11 +241,15 @@ function getOrigRegion ()
 {
   local v_file v_region
   v_file=~/.oci/config
-  if $(echo "$v_oci_args" | grep -q -- '--config-file')
+  if $(echo "$v_oci_args" | grep -q -i -- '--config-file')
   then
     exitError "Please specify Source Region parameter."
   fi
-  v_region=$(cat "${v_file}" | grep "region=" | sed 's/region=//')
+  if $(echo "$v_oci_args" | grep -q -i -- '--profile')
+  then
+    exitError "Please specify Source Region parameter."
+  fi
+  v_region=$(awk '/DEFAULT/{x=1}x&&/region/{print;exit}' "${v_file}" | sed 's/region[ ]*=[ ]*//')
   [ ! -r "${v_file}" ] && exitError "Could not read OCI config file."
   if [ -n "${v_region}" ]
   then
@@ -339,7 +397,7 @@ function in_subnet ()
   # Determine if IP in range.
   (( $ip >= $start )) && (( $ip <= $end )) && rval=1 || rval=0
   
-  (( $DEBUG )) && printf "ip=0x%08X; start=0x%08X; end=0x%08X; in_subnet=%u\n" $ip $start $end $rval 1>&2
+  [ $DEBUG -ge 2 ] && printf "ip=0x%08X; start=0x%08X; end=0x%08X; in_subnet=%u\n" $ip $start $end $rval 1>&2
   
   echo "${rval}"
 }
@@ -457,7 +515,7 @@ checkError "$v_orig_imageJson" "$v_ret" "Could not get Image Json."
 
 v_orig_OS=$(echo "$v_orig_imageJson" | ${v_jq} -rc '.data."operating-system"')
 checkError "$v_orig_OS" "Could not get Image OS."
-[ "${v_orig_OS}" == "Windows" ] && exitError "Cloning Oracle Windows based compute instances is not yet supported by OCI."
+[ "${v_orig_OS}" == "Windows" ] && exitError "Cloning Oracle Windows based compute instances is not yet supported by OCI-CLI."
 
 #### Collect Clone Information
 
@@ -511,8 +569,9 @@ fi
 v_clone_subnetJson=$(${v_oci} network subnet get --subnet-id ${v_clone_subnetID} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
 checkError "$v_clone_subnetJson" "$v_ret" "Can't find Clone Subnet."
 
-v_clone_AD=$(echo "${v_clone_subnetJson}" |  ${v_jq} -rc '."availability-domain"')
-checkError "${v_clone_AD}" "${v_ret}" "Can't find Clone AD."
+v_clone_AD=$(echo "${v_clone_subnetJson}" |  ${v_jq} -rc '."availability-domain" // empty')
+checkError "x" "${v_ret}" "Can't find Clone AD."
+[ -z "${v_clone_AD}" ] && v_clone_AD="${v_orig_AD}" # If regional Subnet
 
 v_clone_compID=$(echo "${v_clone_subnetJson}" |  ${v_jq} -rc '."compartment-id"') && v_ret=$? || v_ret=$?
 checkError "${v_clone_compID}" "${v_ret}" "Could not get the clone Compartment ID."
@@ -539,7 +598,7 @@ then
   v_target_region="${v_return}"
 fi
 
-[ "${v_orig_region}" == "${v_target_region}" ] && exitError "Source and Target regions can't be the same."
+[ "${v_orig_region}" == "${v_target_region}" ] && exitError "Source and Target regions can't be the same. Use \"oci_compute_clone.sh\" instead."
 
 setRetion "${v_target_region}"
 
@@ -594,8 +653,15 @@ v_target_compID=$(echo "${v_target_subnetJson}" |  ${v_jq} -rc '."compartment-id
 checkError "${v_target_compID}" "${v_ret}" "Could not get the target Compartment ID."
 v_target_compArg="--compartment-id ${v_target_compID}"
 
-v_target_AD=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."availability-domain"') && v_ret=$? || v_ret=$?
-checkError "${v_target_AD}" "${v_ret}" "Can't find Target AD."
+v_target_AD=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."availability-domain" // empty') && v_ret=$? || v_ret=$?
+checkError "x" "${v_ret}" "Can't find Target AD."
+
+# When target subnet is regional, will use first AD for the instance.
+if [ -z "${v_target_AD}" ]
+then
+  v_target_AD=$(${v_oci} iam availability-domain list | ${v_jq} -rc '.data[0]."name"') && v_ret=$? || v_ret=$?
+  checkError "${v_target_AD}" "${v_ret}" "Can't define Target AD."
+fi
 
 v_target_allowPub=$(echo "${v_target_subnetJson}" | ${v_jq} -rc '."prohibit-public-ip-on-vnic"') && v_ret=$? || v_ret=$?
 checkError "${v_target_allowPub}" "${v_ret}" "Can't get target IP allowance."
@@ -668,13 +734,13 @@ then
   v_os_bucketName="${v_return}"
 fi
 
-v_os_bucketJson=$(${v_oci} os bucket get --bucket-name ${v_os_bucketName} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
-checkError "${v_os_bucketJson}" "${v_ret}" "Can't find OS Bucket."
+# New version is not using public OS Buckets to move anymore.
+# v_os_bucketJson=$(${v_oci} os bucket get --bucket-name ${v_os_bucketName} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+# checkError "${v_os_bucketJson}" "${v_ret}" "Can't find OS Bucket."
 
-v_os_bucketPublic=$(echo "${v_os_bucketJson}" | ${v_jq} -rc '."public-access-type"')
-checkError "${v_os_bucketPublic}" "Can't get Bucket public attribute."
-[ "${v_os_bucketPublic}" == "NoPublicAccess" ] && exitError "OS Bucket must have Public ObjectRead Access enabled."
-
+# v_os_bucketPublic=$(echo "${v_os_bucketJson}" | ${v_jq} -rc '."public-access-type"')
+# checkError "${v_os_bucketPublic}" "Can't get Bucket public attribute."
+# [ "${v_os_bucketPublic}" == "NoPublicAccess" ] && exitError "OS Bucket must have Public ObjectRead Access enabled."
 
 #####
 #####
@@ -687,6 +753,8 @@ function printStep ()
   ((v_step++))
 }
 
+echoStatus "Starting execution."
+echo "Steps:"
 echo "$v_all_steps"
 
 ######
@@ -722,7 +790,9 @@ v_params+=(--max-wait-seconds $v_ocicli_timeout)
 v_params+=(--wait-for-state AVAILABLE)
 v_params+=(--source-details "${v_volList}")
 
+(( $DEBUG )) && set -x
 v_orig_VGJson=$(${v_oci} bv volume-group create "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_orig_VGJson" "$v_ret" "Could not create Volume Group."
 
 v_orig_VGID=$(echo "$v_orig_VGJson"| ${v_jq} -rc '.data."id"')
@@ -744,7 +814,9 @@ v_params+=(--type INCREMENTAL)
 v_params+=(--wait-for-state AVAILABLE)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+(( $DEBUG )) && set -x
 v_orig_VGBackupJson=$(${v_oci} bv volume-group-backup create "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_orig_VGBackupJson" "$v_ret" "Could not create Volume Group Backup."
 
 v_orig_VGBackupID=$(echo "$v_orig_VGBackupJson"| ${v_jq} -rc '.data."id"')
@@ -762,7 +834,9 @@ v_params+=(--force)
 v_params+=(--wait-for-state TERMINATED)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+(( $DEBUG )) && set -x
 ${v_oci} bv volume-group delete "${v_params[@]}" && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "x" "$v_ret" "Could not remove Volume Group."
 
 ######
@@ -789,7 +863,10 @@ v_params+=(--availability-domain ${v_clone_AD})
 v_params+=(--wait-for-state AVAILABLE)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+(( $DEBUG )) && set -x
 v_clone_BVJson=$(${v_oci} bv boot-volume create "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
+
 checkError "$v_clone_BVJson" "$v_ret" "Could not create Boot Volume from Backup."
 
 v_clone_BVID=$(echo "$v_clone_BVJson" | ${v_jq} -rc '.data."id"')
@@ -815,7 +892,9 @@ v_params+=(--source-boot-volume-id ${v_clone_BVID})
 v_params+=(--subnet-id ${v_clone_subnetID})
 v_params+=(--assign-public-ip false)
 
+(( $DEBUG )) && set -x
 v_clone_instJson=$(${v_oci} compute instance launch "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_clone_instJson" "$v_ret" "Could not create Clone Instance."
 
 v_clone_instID=$(echo "$v_clone_instJson" | ${v_jq} -rc '.data."id"')
@@ -833,7 +912,9 @@ v_params+=(--action STOP)
 v_params+=(--wait-for-state STOPPED)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+(( $DEBUG )) && set -x
 ${v_oci} compute instance action "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "x" "$v_ret" "Could not stop Clone Instance."
 
 ######
@@ -851,7 +932,9 @@ v_params+=(--instance-id ${v_clone_instID})
 v_params+=(--wait-for-state AVAILABLE)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+(( $DEBUG )) && set -x
 v_clone_imageJson=$(${v_oci} compute image create "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_clone_imageJson" "$v_ret" "Could not create Image from Clone Instance."
 
 v_clone_imageID=$(echo "$v_clone_imageJson" | ${v_jq} -rc '.data."id"')
@@ -870,21 +953,25 @@ v_params+=(--force)
 v_params+=(--wait-for-state TERMINATED)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+(( $DEBUG )) && set -x
 ${v_oci} compute instance terminate "${v_params[@]}" && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "x" "$v_ret" "Could not terminate Clone Instance."
 
 ######
 ### 09
 ######
 
-"${v_workdir}"/${v_oci_image_clone_script} "${v_clone_imageID}" "${v_os_bucketName}" "${v_target_region}" "${v_orig_region}"
+"${v_workdir}"/${v_oci_image_clone_script} -i "${v_clone_imageID}" -b "${v_os_bucketName}" -t "${v_target_region}" -s "${v_orig_region}"
 
 setRetion "${v_target_region}"
 
 v_params=()
 v_params+=(${v_clone_compArg})
 
+(( $DEBUG )) && set -x
 v_target_imageJson=$(${v_oci} compute image list "${v_params[@]}" | ${v_jq} -rc '.data[] | select (."freeform-tags"."Source_OCID"=="'${v_clone_imageID}'")') && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_target_imageJson" "$v_ret" "Could not get Json of imported Image."
 
 v_target_imageID=$(echo "$v_target_imageJson" | ${v_jq} -rc '."id"')
@@ -906,7 +993,9 @@ v_params+=(--force)
 v_params+=(--wait-for-state DELETED)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+(( $DEBUG )) && set -x
 ${v_oci} compute image delete "${v_params[@]}" && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "x" "$v_ret" "Could not delete Source Image."
 
 ######
@@ -952,6 +1041,24 @@ v_out=$(echo "$v_orig_instJson" | ${v_jq} -rc '."fault-domain"')
 # --ipxe-script-file
 v_out=$(echo "$v_orig_instJson" | ${v_jq} -rc '."ipxe-script" // empty')
 [ -z "$v_out" ] || v_params+=(--ipxe-script-file "$v_out")
+# --is-pv-encryption-in-transit-enabled
+v_out=$(echo "$v_orig_instJson" | ${v_jq} -rc '."launch-options"."is-pv-encryption-in-transit-enabled"')
+[ -z "$v_out" ] || v_params+=(--is-pv-encryption-in-transit-enabled "$v_out")
+
+# --launch-options
+v_target_launchOptions='{'
+v_out=$(echo "$v_orig_instJson" | ${v_jq} -rc '."launch-options"."boot-volume-type"')
+[ -z "$v_out" ] || v_target_launchOptions+="\"bootVolumeType\": \"$v_out\","
+v_out=$(echo "$v_orig_instJson" | ${v_jq} -rc '."launch-options"."firmware"')
+[ -z "$v_out" ] || v_target_launchOptions+="\"firmware\": \"$v_out\","
+v_out=$(echo "$v_orig_instJson" | ${v_jq} -rc '."launch-options"."is-consistent-volume-naming-enabled"')
+[ -z "$v_out" ] || v_target_launchOptions+="\"isConsistentVolumeNamingEnabled\": \"$v_out\","
+v_out=$(echo "$v_orig_instJson" | ${v_jq} -rc '."launch-options"."network-type"')
+[ -z "$v_out" ] || v_target_launchOptions+="\"networkType\": \"$v_out\","
+v_out=$(echo "$v_orig_instJson" | ${v_jq} -rc '."launch-options"."remote-data-volume-type"')
+[ -z "$v_out" ] || v_target_launchOptions+="\"remoteDataVolumeType\": \"$v_out\""
+v_target_launchOptions+='}'
+v_params+=(--launch-options "$v_target_launchOptions")
 
 v_params+=(--availability-domain ${v_target_AD})
 v_params+=(--shape "${v_target_shape}")
@@ -963,7 +1070,9 @@ v_params+=(--subnet-id ${v_target_subnetID})
 v_params+=(--private-ip ${v_target_IP})
 v_params+=(${v_target_compArg})
 
+(( $DEBUG )) && set -x
 v_target_instJson=$(${v_oci} compute instance launch "${v_params[@]}") && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "$v_target_instJson" "$v_ret" "Could not create Target Instance."
 
 v_target_instID=$(echo "$v_target_instJson" | ${v_jq} -rc '.data."id"')
@@ -980,7 +1089,9 @@ v_params+=(--image-id ${v_target_imageID})
 v_params+=(--force)
 v_params+=(--wait-for-state DELETED)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
+(( $DEBUG )) && set -x
 ${v_oci} compute image delete "${v_params[@]}" && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 checkError "x" "$v_ret" "Could not delete Target Image."
 
 ######
@@ -1006,7 +1117,7 @@ do
     while true
     do
       v_target_volBackupJson=$(${v_oci} bv backup list ${v_target_compArg} --all) && v_ret=$? || v_ret=$?
-      checkError "$v_target_volBackupJson" "$v_ret" "Could not get Target Backup status."
+      checkError "x" "$v_ret" "Could not get Target Backup status."
       v_target_bkpVolStatus=$(echo "$v_target_volBackupJson" | ${v_jq} -rc '.data[] | select(."lifecycle-state"=="CREATING" and ."source-volume-backup-id"!=null) | ."lifecycle-state"' | sort -u)
       [ -z "${v_target_bkpVolStatus}" ] && break
       echo "There are backups with status ${v_target_bkpVolStatus} in target. Please wait."
@@ -1015,7 +1126,9 @@ do
 
     setRetion "${v_orig_region}"
 
+    (( $DEBUG )) && set -x
     v_target_volBackupJson=$(${v_oci} bv backup copy "${v_params[@]}") && v_ret=$? || v_ret=$?
+    (( $DEBUG )) && set +x
     checkError "$v_target_volBackupJson" "$v_ret" "Could not copy the backup to target region."
 
     v_target_volBackupID=$(echo "$v_target_volBackupJson" | ${v_jq} -rc '.data."id"')
@@ -1049,7 +1162,10 @@ v_params+=(--volume-group-backup-id ${v_orig_VGBackupID})
 v_params+=(--force)
 v_params+=(--wait-for-state TERMINATED)
 v_params+=(--max-wait-seconds $v_ocicli_timeout)
+
+(( $DEBUG )) && set -x
 ${v_oci} bv volume-group-backup delete "${v_params[@]}" && v_ret=$? || v_ret=$?
+(( $DEBUG )) && set +x
 [ $v_ret -eq 0 ] || echoError "Could not remove Volume Group Backup."
 
 ######
@@ -1077,7 +1193,9 @@ do
   v_orig_volName=$(echo "${v_orig_volJson}" | ${v_jq} -rc '."display-name"')
   v_target_volName=$(echo "${v_orig_volName}" | sed "${v_sedrep_rule_target_name}")
 
+  (( $DEBUG )) && set -x
   v_origVolBkpPolID=$(${v_oci} bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id ${v_orig_volID} | ${v_jq} -rc '.data[]."policy-id"') && v_ret=$? || v_ret=$?
+  (( $DEBUG )) && set +x
   checkError "x" "$v_ret" "Could not get Volume Backup Policy ID." # Can be null
 
   setRetion "${v_target_region}"
@@ -1099,7 +1217,9 @@ do
   #v_params+=(--size-in-gbs)
   #v_params+=(--size-in-mbs)
 
+  (( $DEBUG )) && set -x
   v_target_volJson=$(${v_oci} bv volume create "${v_params[@]}") && v_ret=$? || v_ret=$?
+  (( $DEBUG )) && set +x
   checkError "$v_target_volJson" "$v_ret" "Could not create Volume."
   v_target_volID=$(echo "$v_target_volJson"| ${v_jq} -rc '.data."id"')
   v_orig_volList+=(${v_orig_volID})
@@ -1122,7 +1242,9 @@ do
   v_params+=(--wait-for-state TERMINATED)
   v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+  (( $DEBUG )) && set -x
   ${v_oci} bv backup delete "${v_params[@]}" && v_ret=$? || v_ret=$?
+  (( $DEBUG )) && set +x
   [ $v_ret -eq 0 ] || echoError "Could not remove Target Volume Backup."
 done
 
@@ -1150,7 +1272,9 @@ do
   v_params+=(--wait-for-state ATTACHED)
   v_params+=(--max-wait-seconds $v_ocicli_timeout)
 
+  (( $DEBUG )) && set -x
   ${v_oci} compute volume-attachment attach "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
+  (( $DEBUG )) && set +x
   checkError "x" "$v_ret" "Could not associate target volume."
 
   ((++v_i)) # ((v_i++)) will abort the script
@@ -1162,11 +1286,7 @@ done
 
 printStep
 
-v_skip_ssh=0
-if [ "${v_orig_OS}" == "Windows" ]
-then
-  v_skip_ssh=1
-fi
+[ -z "${v_skip_ssh}" ] && v_skip_ssh=1
 
 v_iscsiadm=""
 for v_orig_volID in "${v_orig_volList[@]}"
@@ -1194,61 +1314,58 @@ done
 
 function sshExecute ()
 {
-  local v_loop v_timeout v_sleep v_total v_input v_ret v_IP v_code
+  local v_loop v_timeout v_sleep v_total v_ret v_IP v_code
   v_IP="$1"
   v_code="$2"
+
+  echo "Lines above will be executed in target machine via SSH to opc@${v_IP}."
+
+  ## Wait SSH UP
+  echo 'Checking Server availability..'
+  v_loop=1
+  v_timeout=5
+  v_sleep=10
+  v_total=40
+  while [ ${v_loop} -le ${v_total} ]
+  do
+    timeout ${v_timeout} bash -c "true &>/dev/null </dev/tcp/$v_IP/22" && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep 3
+    [ $v_ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep ${v_sleep}
+  done
+
+  ## Update Attachments
+  ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no opc@${v_IP} "bash -s" < <(echo "$v_code")
+  echo ""
+
+}
+
+if [ -n "${v_iscsiadm}" -a "${v_orig_OS}" != "Windows" ]
+then
+
   echo ""
   echo '## IF YOUR INSTANCE IS LINUX, CONNECT AS OPC AND EXECUTE:'
   echo '## '$(printf '=%.0s' {1..80})
-  echo -n "${v_code}"
+  echo -n "${v_iscsiadm}"
   echo '## '$(printf '=%.0s' {1..80})
   echo ""
 
-  ## Ask if reconfig using SSH
-
-  if [ "${v_script_ask}" == "yes" ]; then
-    echo "Lines above must be executed in target linux machine."
-    echo -n "Type \"YES\" to apply the changes via SSH as opc@${v_IP}: "
-    read v_input
-  else
-    v_input="YES"
-  fi
-  if [ "$v_input" == "YES" ]
+  if [ ${v_skip_ssh} -eq 0 ]
   then
-    ## Wait SSH UP
-    echo 'Checking Server availability..'
-    v_loop=1
-    v_timeout=5
-    v_sleep=10
-    v_total=40
-    while [ ${v_loop} -le ${v_total} ]
-    do
-      timeout ${v_timeout} bash -c "true &>/dev/null </dev/tcp/$v_IP/22" && v_ret=$? || v_ret=$?
-      [ $v_ret -eq 0 ] && v_loop=$((v_total+1)) && echo 'Server Available!' && sleep 3
-      [ $v_ret -ne 0 ] && echo "Server Unreachable, please wait. Try ${v_loop} of ${v_total}." && v_loop=$((v_loop+1)) && sleep ${v_sleep}
-    done
-
-    ## Update Attachments
-    ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no opc@${v_IP} "bash -s" < <(echo "$v_code")
-    echo ""
-
+    sshExecute "${v_target_IP}" "${v_iscsiadm}"
+    
+    ## Restart Machine
+    echo 'Bouncing the instance..'
+    v_params=()
+    v_params+=(--instance-id "${v_target_instID}")
+    v_params+=(--action SOFTRESET)
+    v_params+=(--wait-for-state RUNNING)
+    v_params+=(--max-wait-seconds $v_ocicli_timeout)
+    
+    (( $DEBUG )) && set -x
+    ${v_oci} compute instance action "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
+    (( $DEBUG )) && set +x
+    checkError "x" "$v_ret" "Not able to bounce the instance."
   fi
-}
-
-if [ -n "${v_iscsiadm}" -a ${v_skip_ssh} -eq 0 ]
-then
-
-  sshExecute "${v_target_IP}" "${v_iscsiadm}"
-
-  ## Restart Machine
-  echo 'Bouncing the instance..'
-  v_params=()
-  v_params+=(--instance-id "${v_target_instID}")
-  v_params+=(--action SOFTRESET)
-  v_params+=(--wait-for-state RUNNING)
-  v_params+=(--max-wait-seconds $v_ocicli_timeout)
-  ${v_oci} compute instance action "${v_params[@]}" >&- && v_ret=$? || v_ret=$?
-  checkError "x" "$v_ret" "Not able to bounce the instance."
 
 fi
 
