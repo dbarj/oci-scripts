@@ -42,6 +42,8 @@ This script will clone compute within a Region, to any Compartments or VCN. It w
 
 This script will clone compute from one Region to another, in any Compartments or VCN. It will also clone all compute attributes and disks associated.
 
+[https://www.dbarj.com.br/en/2019/10/automating-clone-of-oci-compute-instance-across-regions/](https://www.dbarj.com.br/en/2019/10/automating-clone-of-oci-compute-instance-across-regions/).
+
 ### oci_compute_fix_bv.sh
 
 This program will automate all steps that you may execute to recover the a non-booting machine. It will attach the boot volume from one instance into another and mount it.
