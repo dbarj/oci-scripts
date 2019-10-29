@@ -1,8 +1,7 @@
 #!/bin/bash
 #************************************************************************
 #
-#   oci_image_clone_xregion.sh - Move a compute image from one region
-#   to another region.
+#   oci_image_clone_xregion.sh - Clone a compute image across Regions
 #
 #   Copyright 2018  Rodrigo Jorge <http://www.dbarj.com.br/>
 #
@@ -21,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.04
+# Version 1.05
 #************************************************************************
 set -eo pipefail
 
@@ -70,7 +69,7 @@ v_min_ocicli="2.6.9"
 
 function echoError ()
 {
-  (>&2 echo "$1")
+   [ -z "$2" ] && (>&2 echo "$1") || (>&2 echoStatus "$1" "$2")
 }
 
 function echoStatus ()
@@ -243,10 +242,10 @@ fi
 v_os_ns=$(${v_oci} os ns get | ${v_jq} -rc '."data"') && v_ret=$? || v_ret=$?
 checkError "$v_os_ns" "$v_ret" "Could not get the namespace for this tenancy."
 
-# New version is not using public OS Buckets to move anymore.
-# v_os_bucketJson=$(${v_oci} os bucket get --bucket-name ${v_os_bucket} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
-# checkError "${v_os_bucketJson}" "$v_ret" "Could not find bucket \"${v_os_bucket}\"."
+v_os_bucketJson=$(${v_oci} os bucket get --bucket-name ${v_os_bucket} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+checkError "${v_os_bucketJson}" "$v_ret" "Could not find bucket \"${v_os_bucket}\"."
 
+# New version is not using public OS Buckets to move anymore.
 # v_os_bucketPublic=$(echo "${v_os_bucketJson}" | ${v_jq} -rc '."public-access-type"')
 # checkError "${v_os_bucketPublic}" "Can't get Bucket public attribute."
 # [ "${v_os_bucketPublic}" == "NoPublicAccess" ] && exitError "OS Bucket must have Public ObjectRead Access enabled."
