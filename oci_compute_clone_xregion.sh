@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Nov/2018 by Rodrigo Jorge
-# Version 1.11
+# Version 1.12
 #************************************************************************
 set -eo pipefail
 
@@ -86,7 +86,7 @@ EOM
 
 function echoError ()
 {
-   (>&2 echo "$1")
+   [ -z "$2" ] && (>&2 echo "$1") || (>&2 echoStatus "$1" "$2")
 }
 
 function echoStatus ()
@@ -124,9 +124,9 @@ function checkError ()
   [ "$#" -ne 2 -a "$#" -ne 3 ] && exitError "checkError wrong usage."
   [ "$#" -eq 2 -a -z "${v_arg2}" ] && exitError "checkError wrong usage."
   [ "$#" -eq 3 -a -z "${v_arg3}" ] && exitError "checkError wrong usage."
-  [ "$#" -eq 2 ] && [ -z "${v_arg1}" ] && echoStatus "${v_arg2}" "RED" && exit 1
-  [ "$#" -eq 3 ] && [ -z "${v_arg1}" ] && echoStatus "${v_arg3}" "RED" && exit 1
-  [ "$#" -eq 3 ] && [ "${v_arg2}" != "0" ] && echoStatus "${v_arg3}" "RED" && exit 1
+  [ "$#" -eq 2 ] && [ -z "${v_arg1}" ] && echoError "${v_arg2}" "RED" && exit 1
+  [ "$#" -eq 3 ] && [ -z "${v_arg1}" ] && echoError "${v_arg3}" "RED" && exit 1
+  [ "$#" -eq 3 ] && [ "${v_arg2}" != "0" ] && echoError "${v_arg3}" "RED" && exit 1
   return 0
 }
 
@@ -734,10 +734,10 @@ then
   v_os_bucketName="${v_return}"
 fi
 
-# New version is not using public OS Buckets to move anymore.
-# v_os_bucketJson=$(${v_oci} os bucket get --bucket-name ${v_os_bucketName} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
-# checkError "${v_os_bucketJson}" "${v_ret}" "Can't find OS Bucket."
+v_os_bucketJson=$(${v_oci} os bucket get --bucket-name ${v_os_bucketName} | ${v_jq} -rc '.data') && v_ret=$? || v_ret=$?
+checkError "${v_os_bucketJson}" "${v_ret}" "Can't find OS Bucket."
 
+# New version is not using public OS Buckets to move anymore.
 # v_os_bucketPublic=$(echo "${v_os_bucketJson}" | ${v_jq} -rc '."public-access-type"')
 # checkError "${v_os_bucketPublic}" "Can't get Bucket public attribute."
 # [ "${v_os_bucketPublic}" == "NoPublicAccess" ] && exitError "OS Bucket must have Public ObjectRead Access enabled."
@@ -1166,7 +1166,7 @@ v_params+=(--max-wait-seconds $v_ocicli_timeout)
 (( $DEBUG )) && set -x
 ${v_oci} bv volume-group-backup delete "${v_params[@]}" && v_ret=$? || v_ret=$?
 (( $DEBUG )) && set +x
-[ $v_ret -eq 0 ] || echoError "Could not remove Volume Group Backup."
+[ $v_ret -eq 0 ] || echoError "Could not remove Volume Group Backup." "RED"
 
 ######
 ### 19
@@ -1245,7 +1245,7 @@ do
   (( $DEBUG )) && set -x
   ${v_oci} bv backup delete "${v_params[@]}" && v_ret=$? || v_ret=$?
   (( $DEBUG )) && set +x
-  [ $v_ret -eq 0 ] || echoError "Could not remove Target Volume Backup."
+  [ $v_ret -eq 0 ] || echoError "Could not remove Target Volume Backup." "RED"
 done
 
 ######
