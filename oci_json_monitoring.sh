@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -eo pipefail
 
@@ -33,6 +33,23 @@ v_jq="jq"
 [ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
 [ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
 
+# DON'T REMOVE/CHANGE THOSE COMMENTS. THEY ARE USED TO DEFINE WHAT WILL BE EXTRACTED FROM MONIT
+
+# BEGIN METRICS
+# oci_computeagent,CpuUtilization
+# oci_computeagent,DiskBytesRead
+# oci_computeagent,DiskBytesWritten
+# oci_computeagent,DiskIopsRead
+# oci_computeagent,DiskIopsWritten
+# oci_computeagent,MemoryUtilization
+# oci_computeagent,NetworksBytesIn
+# oci_computeagent,NetworksBytesOut
+# oci_blockstore,VolumeReadOps
+# oci_blockstore,VolumeReadThroughput
+# oci_blockstore,VolumeWriteOps
+# oci_blockstore,VolumeWriteThroughput
+# END METRICS
+
 # Don't change it.
 v_min_ocicli="2.4.34"
 
@@ -42,8 +59,9 @@ v_oci_timeout=1800 # Seconds
 # Default period in days to collect info, if omitted on parameters
 v_def_period=3
 
+[[ "${TMPDIR}" == "" ]] && TMPDIR='/tmp/'
 # Temporary Folder. Used to stage some repetitive jsons and save time. Empty to disable (not recommended).
-v_tmpfldr="$(mktemp -d -u -p /tmp/.oci 2>&- || mktemp -d -u)"
+v_tmpfldr="$(mktemp -d -u -p ${TMPDIR}/.oci 2>&- || mktemp -d -u)"
 
 # Export DEBUG=1 to see the steps being executed.
 [[ "${DEBUG}" == "" ]] && DEBUG=0
@@ -79,6 +97,7 @@ function echoDebug ()
 {
    local v_filename="${v_this_script%.*}.log"
    (( $DEBUG )) && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ${v_filename}
+   (( $DEBUG )) && [ -f "../${v_filename}" ] && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ../${v_filename}
    return 0
 }
 
@@ -371,15 +390,15 @@ function jsonMetricData ()
   if [ "${v_arg1}" == "1m" ]
   then
     v_jump=$((3600*3*1))            # Jump 3 hours
-    v_storage_limit=$((3600*24*7))  # Storage limit
+    v_storage_limit=$((3600*24*7))  # Storage limit 7 days
   elif [ "${v_arg1}" == "5m" ]
   then
     v_jump=$((3600*24*1))           # Jump 24 hours
-    v_storage_limit=$((3600*24*30)) # Storage limit
+    v_storage_limit=$((3600*24*30)) # Storage limit 30 days
   elif [ "${v_arg1}" == "1h" ]
   then
     v_jump=$((3600*24*7))           # Jump 7 days
-    v_storage_limit=$((3600*24*90)) # Storage limit
+    v_storage_limit=$((3600*24*90)) # Storage limit 90 days
   else
     echoError "${FUNCNAME[0]} parameter must be 1m, 5m or 1h"
     return 1
@@ -409,7 +428,7 @@ function jsonMetricData ()
   then
     ## Align to Sunday.
     v_start_weekday=$(ConvEpochToWeekDay ${v_start_epoch})
-    if [ ${v_start_weekday} -eq 1 ]
+    if [ ${v_start_weekday} -eq 7 ]
     then
       v_next_epoch_end=$((${v_next_epoch_start}+${v_jump}))
     else
@@ -440,7 +459,12 @@ function jsonMetricData ()
       v_ret=$?
       set -e
       [ $v_ret -ne 0 -a $v_ret -ne 20 ] && return $v_ret # Will only continue if return code is 0 or 20 (20=some compartment had an error)
-      [ $v_ret -eq 0 ] && { (putOnHist "${v_search}" "${v_out}") || true ; }
+      if [ $v_ret -eq 0 ]
+      then
+        create_lock_or_wait
+        (putOnHist "${v_search}" "${v_out}") || true
+        remove_lock
+      fi
     else
       echoDebug "Got \"${v_search}\" from Zip Hist."
     fi
@@ -475,6 +499,8 @@ function jsonMetricData ()
   return 0
 }
 
+v_metric_list=$(sed -e '1,/^# BEGIN METRICS/d' -e '/^# END METRICS/,$d' -e 's/^# *//' $0)
+
 function jsonAllMetricList ()
 {
   ##########
@@ -504,8 +530,10 @@ function jsonAllMetricList ()
     v_vl2=$(${v_jq} -r '.[1]' <<< "${v_item}")
     v_vl3=$(${v_jq} -r '.[2]' <<< "${v_item}")
 
+    grep -q "${v_vl2},${v_vl3}" <(echo "$v_metric_list") || continue
+
     set +e
-    v_out=$(jsonSimple "${v_arg1} --compartment-id ${v_vl1} --namespace ${v_vl2} --query-text '${v_vl3}[${v_arg3}].${v_arg4}()'" "${v_arg2}")
+    v_out=$(jsonSimple "${v_arg1} --compartment-id ${v_vl1} --namespace ${v_vl2} --query-text '${v_vl3}[${v_arg3}].${v_arg4}'" "${v_arg2}")
     v_ret=$?
     set -e
     [ $v_ret -ne 0 ] && v_ret_final=20 # Try next compartment if one fails and set return code to 20.
@@ -610,7 +638,9 @@ function runOCI ()
     then
       v_out="${b_out}"
       # [ -z "${b_err}" ] && putOnHist "${v_search}" "${v_out}" || true
+      create_lock_or_wait
       putOnHist "${v_search}" "${v_out}" || true
+      remove_lock
     else
       return $b_ret
     fi
@@ -682,10 +712,17 @@ function jsonConcatData ()
 # IAM-RegionSub,oci_iam_region-subscription.json,jsonSimple,"iam region-subscription list" "."
 # IAM-Comparts,oci_iam_compartment.json,jsonCompartments
 # Monit-MetricsList,oci_monit_metric_list.json,jsonAllCompart,"monitoring metric list --all" "."
-# Monit-MetricsData-1h-max,oci_monit_metric_data_1h_max.json,jsonMetricData "1h" "max"
+# Monit-MetricsData-1h-max,oci_monit_metric_data_1h_max.json,jsonMetricData "1h" "max()"
+# Monit-MetricsData-1h-mean,oci_monit_metric_data_1h_mean.json,jsonMetricData "1h" "mean()"
+# Monit-MetricsData-1h-rate,oci_monit_metric_data_1h_rate.json,jsonMetricData "1h" "rate()"
+# Monit-MetricsData-1h-p90,oci_monit_metric_data_1h_p90.json,jsonMetricData "1h" "percentile(0.9)"
+# Monit-MetricsData-1h-p95,oci_monit_metric_data_1h_p95.json,jsonMetricData "1h" "percentile(0.95)"
+# Monit-MetricsData-1h-p99,oci_monit_metric_data_1h_p99.json,jsonMetricData "1h" "percentile(0.99)"
+# Monit-MetricsData-1h-p99-9,oci_monit_metric_data_1h_p99-9.json,jsonMetricData "1h" "percentile(0.999)"
+# END DYNFUNC
+
 # Monit-MetricsData-5m-max,oci_monit_metric_data_5m_max.json,jsonMetricData "5m" "max"
 # Monit-MetricsData-1m-max,oci_monit_metric_data_1m_max.json,jsonMetricData "1m" "max"
-# END DYNFUNC
 
 # The while loop below will create a function for each line above.
 # Using File Descriptor 3 to not interfere on "eval"
@@ -711,9 +748,9 @@ do
             set +e
             local c_ret
             stopIfProcessed ${c_fname} || return 0
-            (${c_subfunc} ${c_param} > ${v_tmpfldr}/.${c_fname})
+            (${c_subfunc} ${c_param} > \${v_tmpfldr}/.${c_fname})
             c_ret=\$?
-            cat ${v_tmpfldr}/.${c_fname}
+            cat \${v_tmpfldr}/.${c_fname}
             return \${c_ret}
           }"
   fi
@@ -749,7 +786,7 @@ function runAndZip ()
   local v_arg1 v_arg2 v_ret
   v_arg1="$1"
   v_arg2="$2"
-  echo "Processing \"${v_arg2}\"."
+  [ -z "${v_region}" ] && echo "Processing \"${v_arg2}\"." || echo "Processing \"${v_arg2}\" in ${v_region}."
   set +e
   (${v_arg1} > "${v_arg2}" 2> "${v_arg2}.err") # Executing in subshell as inner function may run with set -e and fail, aborting whole code.
   v_ret=$?
@@ -775,7 +812,6 @@ function runAndZip ()
   else
     rm -f "${v_arg2}"
   fi
-  echo "$v_arg2" >> "${v_listfile}"
 }
 
 function cleanTmpFiles ()
@@ -784,7 +820,7 @@ function cleanTmpFiles ()
   # Clean folder where current execution temporary files are placed.
   ##########
 
-  [ -n "${v_tmpfldr}" ] && rm -f "${v_tmpfldr}"/.*.json 2>&- || true
+  [ -n "${v_tmpfldr}" ] && rm -f "${v_tmpfldr}"/.*.json   2>&- || true
   return 0
 }
 
@@ -887,11 +923,37 @@ function putOnHist ()
   else
     [ $(wc -l <<< "${v_line}") -gt 1 ] && return 1
     v_file=$(cut -d"${v_sep}" -f2 <<< "${v_line}")
-    [ ! -r "${v_hist_folder}/${v_file}" ] && return 1
+    # [ ! -r "${v_hist_folder}/${v_file}" ] && return 1
     echo "${v_arg2}" > "${v_hist_folder}/${v_file}"
   fi
   ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_list}"
   ${v_zip} -qj ${HIST_ZIP_FILE} "${v_hist_folder}/${v_file}"
+  return 0
+}
+
+function create_lock_or_wait ()
+{
+  [ -z "${HIST_ZIP_FILE}" -o -z "${v_region}" ] && return 0
+  local wait_time=1
+  local v_ret
+  #echoDebug "${v_region} - ZIP Locking."
+  while true
+  do
+    mkdir "${HIST_ZIP_FILE}.lock.d" 2>&- && v_ret=$? || v_ret=$?
+    [ $v_ret -eq 0 ] && break
+    sleep $wait_time
+    #echoDebug "${v_region} - ZIP Waiting."
+  done
+  #echoDebug "${v_region} - ZIP Locked."
+  return 0
+}
+
+function remove_lock ()
+{
+  [ -z "${HIST_ZIP_FILE}" -o -z "${v_region}" ] && return 0
+  #echoDebug "${v_region} - ZIP Unlocking."
+  rmdir "${HIST_ZIP_FILE}.lock.d"
+  #echoDebug "${v_region} - ZIP Unlocked."
   return 0
 }
 
@@ -903,8 +965,6 @@ function main ()
 
   # If ALL or ALL_REGIONS, loop over all defined options.
   local c_line c_name c_file
-  cleanTmpFiles
-  uncompressHist
   if [ "${v_param1}" != "ALL" -a "${v_param1}" != "ALL_REGIONS" ]
   then
     set +e
@@ -913,44 +973,62 @@ function main ()
     set -e
   else
     [ -n "$v_outfile" ] || v_outfile="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S').zip"
-    v_listfile="${v_this_script%.*}_list.txt"
-    rm -f "${v_listfile}"
     while read -u 3 -r c_line || [ -n "$c_line" ]
     do
        c_name=$(cut -d ',' -f 1 <<< "$c_line")
        c_file=$(cut -d ',' -f 2 <<< "$c_line")
        runAndZip $c_name $c_file
     done 3< <(echo "$v_func_list")
-    ${v_zip} -qm "$v_outfile" "${v_listfile}"
+    [ "${v_param1}" == "ALL_REGIONS" -a -f "${v_this_script%.*}.log" ] && ${v_zip} -qm "$v_outfile" "${v_this_script%.*}.log"
     v_ret=0
   fi
-  cleanHist
-  cleanTmpFiles
 }
 
 # Start code execution.
 [ "${v_param1}" == "ALL_REGIONS" -o "${v_param1}" == "ALL" ] && DEBUG=1
 
 echoDebug "BEGIN"
+cleanTmpFiles
+uncompressHist
 if [ "${v_param1}" == "ALL_REGIONS" ]
 then
   l_regions=$(IAM-RegionSub | ${v_jq} -r '.data[]."region-name"')
   v_oci_orig="$v_oci"
+  v_tmpfldr_base="${v_tmpfldr}"
   v_outfile_pref="${v_this_script%.*}_$(date '+%Y%m%d%H%M%S')"
+  v_hist_folder_orig="${v_hist_folder}"
+  v_hist_folder="../${v_hist_folder_orig}"
   for v_region in $l_regions
   do
-    echo "########################"
-    echo "Region ${v_region} set."
+    echo "Starting region ${v_region}."
     v_oci="${v_oci_orig} --region ${v_region}"
     v_outfile="${v_outfile_pref}_${v_region}.zip"
-    main
+    [ -n "${v_tmpfldr_base}" ] && { v_tmpfldr="${v_tmpfldr_base}/${v_region}"; mkdir "${v_tmpfldr}"; }
+    mkdir ${v_region} 2>&- || true
+    cd ${v_region}
+    main &
+    v_pids+=(${v_region}::$!)
+    cd ..
   done
+  for v_reg_ind in "${v_pids[@]}"
+  do
+      v_region="${v_reg_ind%%::*}"
+      wait ${v_reg_ind##*::}
+      mv ${v_region}/* ./
+      rmdir ${v_region}
+      [ -n "${v_tmpfldr_base}" ] && { v_tmpfldr="${v_tmpfldr_base}/${v_region}"; cleanTmpFiles; rmdir "${v_tmpfldr}" || true; }
+  done
+  v_hist_folder="${v_hist_folder_orig}"
+  v_tmpfldr="${v_tmpfldr_base}"
 else
   main
 fi
+cleanHist
+cleanTmpFiles
 echoDebug "END"
 
-[ "${v_param1}" == "ALL_REGIONS" -o "${v_param1}" == "ALL" ] && ${v_zip} -qm "$v_outfile" "${v_this_script%.*}.log"
+[ -f "${v_this_script%.*}.log" -a "${v_param1}" == "ALL_REGIONS" ] && { mv "${v_this_script%.*}.log" "${v_this_script%.*}.full.log"; ${v_zip} -qm "$v_outfile" "${v_this_script%.*}.full.log"; }
+[ -f "${v_this_script%.*}.log" -a -f "$v_outfile" ] && ${v_zip} -qm "$v_outfile" "${v_this_script%.*}.log"
 
 [ -n "${v_tmpfldr}" ] && rmdir ${v_tmpfldr} 2>&- || true
 
