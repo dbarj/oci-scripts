@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2019 by Rodrigo Jorge
-# Version 1.07
+# Version 1.08
 #************************************************************************
 set -eo pipefail
 
@@ -568,7 +568,7 @@ function curlAccountTag ()
     v_next_epoch_start=${v_start_epoch}
     v_next_date_start=$(ConvEpochToYMDhms ${v_next_epoch_start})
     ## Align to Sunday.
-    if [ ${v_start_weekday} -eq 1 ]
+    if [ ${v_start_weekday} -eq 7 ]
     then
       v_next_epoch_end=$((${v_next_epoch_start}+${v_jump}))
     else
