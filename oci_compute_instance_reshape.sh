@@ -20,7 +20,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.10
+# Version 1.11
 #************************************************************************
 set -e
 
@@ -105,10 +105,10 @@ v_ocicli_timeout=3600
 
 [ -z "${v_oci_args}" ] || v_oci="${v_oci} ${v_oci_args}"
 
-v_test=$(${v_oci} iam compartment list --all 2>&1) && ret=$? || ret=$?
+v_test=$(${v_oci} iam compartment list --compartment-id-in-subtree true --all 2>&1) && ret=$? || ret=$?
 if [ $ret -ne 0 ]
 then
-  echoError "oci-cli not able to run \"${v_oci} iam compartment list --all\". Please check error:"
+  echoError "oci-cli not able to run \"${v_oci} iam compartment list --compartment-id-in-subtree true --all\". Please check error:"
   echoError "$v_test"
   exit 1
 fi
@@ -120,7 +120,7 @@ then
   v_inst_name=$(${v_oci} compute instance get --instance-id "${v_instanceID}" | ${v_jq} -rc '.data."display-name"') && ret=$? || ret=$?
   [ $ret -eq 0 -a -n "$v_inst_name" ] || exitError "Could not get Display Name of compute ${v_instanceID}"
 else
-  v_list_comps=$(${v_oci} iam compartment list --all | ${v_jq} -rc '.data[]."id"') && ret=$? || ret=$?
+  v_list_comps=$(${v_oci} iam compartment list --compartment-id-in-subtree true --all | ${v_jq} -rc '.data[]."id"') && ret=$? || ret=$?
   [ $ret -eq 0 -a -n "$v_list_comps" ] || exitError "Could not list Compartments."
   for v_comp in $v_list_comps
   do
