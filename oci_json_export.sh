@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 1.20
+# Version 1.21
 #************************************************************************
 set -e
 
@@ -612,6 +612,10 @@ function jsonConcat ()
 # LB-Protocols,oci_lb_protocol.json,jsonAllCompartAddTag,"lb protocol list --all"
 # LB-Shapes,oci_lb_shape.json,jsonAllCompartAddTag,"lb shape list --all"
 # LB-WorkReqs,oci_lb_work-request.json,jsonGenericMasterAdd,"lb work-request list" "LB-LoadBalancers" "id:load-balancer-id:load-balancer-id" "jsonSimple"
+# Limit-Services,oci_limit_services.json,jsonAllCompartAddTag,"limits service list --all"
+# Limit-Quotas,oci_limit_quotas.json,jsonAllCompartAddTag,"limits quota list --all"
+# Limit-Values,oci_limit_values.json,jsonGenericMasterAdd,"limits value list --all" "Limit-Services" "name:service-name:service-name:compartment-id:compartment-id:compartment-id" "jsonSimple"
+# Limit-ResAvail,oci_limit_res-avail.json,jsonGenericMasterAdd,"limits resource-availability get" "Limit-Values" "name:limit-name:limit-name:service-name:service-name:service-name:compartment-id:compartment-id:compartment-id:availability-domain:availability-domain:availability-domain" "jsonSimple"
 # Net-Cpe,oci_network_cpe.json,jsonAllCompart,"network cpe list --all"
 # Net-CrossConn,oci_network_cross-connect.json,jsonAllCompart,"network cross-connect list --all"
 # Net-CrossConnGrp,oci_network_cross-connect-group.json,jsonAllCompart,"network cross-connect-group list --all"
