@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.07
+# Version 1.08
 #************************************************************************
 set -eo pipefail
 
@@ -253,6 +253,9 @@ then
   echoError "With zip history, next executions will be much faster. It's extremelly recommended to enable it."
   echoError "Press CTRL+C in next 10 seconds if you want to exit and fix this."
   sleep 10
+elif [ -d "${HIST_ZIP_FILE}.lock.d" -a -z "${HIST_IGNORE_LOCK}" ]
+then
+  exitError "Lock folder \"${HIST_ZIP_FILE}.lock.d\" exists. Remove it before starting this script."
 fi
 
 ################################################
