@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2020 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -eo pipefail
 
@@ -83,11 +83,6 @@ function echoDebug ()
 
 v_this_script="$(basename -- "$0")"
 
-v_func_list=$(sed -e '1,/^# BEGIN DYNFUNC/d' -e '/^# END DYNFUNC/,$d' -e 's/^# *//' $0)
-v_opt_list=$(echo "${v_func_list}" | cut -d ',' -f 1 | sort | tr "\n" ",")
-v_valid_opts="ALL,ALL_REGIONS"
-v_valid_opts="${v_valid_opts},${v_opt_list}"
-
 v_param1="$1"
 v_param2="$2"
 v_param3="$3"
@@ -98,14 +93,14 @@ then
   echoError ""
   echoError "Valid <option> values are:"
   echoError "-r    - RUN. You need to provide this parameter to execute this script."
-  echoError "-d    - Dry run. Will show you only the commands to get the files that would be executed."
+  echoError "-d    - Dry run. Will show you only the commands to get the CSVs that would be executed."
   echoError ""
   echoError "[begin_time] (Optional) - Defines start time when exporting Usage Info. (Default is $v_def_period days back) "
   echoError "[end_time]   (Optional) - Defines end time when exporting Usage Info. (Default is today)"
   echoError ""
   echoError "PS: it is possible to export the following variables to change oci-cli behaviour:"
   echoError "- OCI_CLI_ARGS - All parameters provided will be appended to oci-cli call."
-  echoError "  Eg: export OCI_CLI_ARGS='--profile ACME'"
+  echoError "                 Eg: export OCI_CLI_ARGS='--profile ACME'"
   exit 1
 fi
 
@@ -206,9 +201,6 @@ then
   echoError "Eg: export HIST_ZIP_FILE='./report_hist.zip'"
   echoError "Press CTRL+C in next 10 seconds if you want to exit and fix this."
   sleep 10
-elif [ -d "${HIST_ZIP_FILE}.lock.d" -a -z "${HIST_IGNORE_LOCK}" ] && ${v_execute}
-then
-  exitError "Lock folder \"${HIST_ZIP_FILE}.lock.d\" exists. Remove it before starting this script."
 fi
 
 ################################################
@@ -223,7 +215,7 @@ function ConvYMDToEpoch ()
   v_in_time="$2"
   [ -z "${v_in_time}" ] && v_in_time="00:00:00"
   case "$(uname -s)" in
-      Linux*)     echo $(date -u '+%s' -d ${v_in_date} ${v_in_time});;
+      Linux*)     echo $(date -u '+%s' -d "${v_in_date} ${v_in_time}");;
       Darwin*)    echo $(date -j -u -f '%Y-%m-%d %T' "${v_in_date} ${v_in_time}" +"%s");;
       *)          echo
   esac  
@@ -245,7 +237,7 @@ function ConvEpochToYMDhms ()
 ################ CORE FUNCTIONS ################
 ################################################
 
-function tanancyID ()
+function tenancyID ()
 {
   set -eo pipefail # Exit if error in any call.
   local v_fout v_tenancy_id
@@ -277,7 +269,7 @@ function csvUsageReport ()
   echo "- Start Date: ${v_start_time} 00:00:00."
   echo "- Final Date: ${v_end_time} 23:59:59."
 
-  v_tenancy_id=$(tanancyID)
+  v_tenancy_id=$(tenancyID)
   echo "- Tenancy OCID is ${v_tenancy_id}."
   v_oci_usagereport="os object list --namespace bling --bucket-name ${v_tenancy_id} --all"
 
@@ -310,7 +302,7 @@ function csvUsageReport ()
     then
       echo "- Getting ${c_name} created on ${c_fdate}."
       v_search="${c_file}_${c_fdate}"
-      # Will first try to get the output from the historical zip. If can't find it, will call the json generator for all compartments.
+      # Will first try to get the output from the historical zip. If can't find it, will call the get function.
       getFileFromZip "${v_search}" "${c_file}" && v_ret=$? || v_ret=$?
       if [ $v_ret -ne 0 ]
       then
@@ -319,7 +311,7 @@ function csvUsageReport ()
         v_out=$(jsonSimple "${v_oci_usagereport}" ".")
         (putFileOnZip "${v_search}" "${c_file}") || true
       else
-        echoDebug "Got \"${v_search}\" from Zip Hist."
+        echoDebug "Got \"${c_file}\" from Zip Hist."
       fi
       ${v_zip} -qm "$v_outfile" "${c_file}"
     else
