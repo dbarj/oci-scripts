@@ -1,7 +1,7 @@
 #!/bin/bash
 #************************************************************************
 #
-#   oci_json_usage.sh - Export all Oracle Cloud usage report
+#   oci_csv_usage.sh - Export all Oracle Cloud usage report
 #   information into CSV files.
 #
 #   Copyright 2019  Rodrigo Jorge <http://www.dbarj.com.br/>
@@ -125,7 +125,7 @@ then
   if ${v_execute}
   then
     echoError "Could not find zip binary. Please include it in \$PATH."
-    echoError "Zip binary is required to put all output json files together."
+    echoError "Zip binary is required to put all output csv files together."
     exit 1
   fi
 fi
