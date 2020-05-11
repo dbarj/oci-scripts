@@ -50,7 +50,7 @@ printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
 
 v_hist_folder="billing_history"
 
-if [ -z "${BASH_VERSION}" ]
+if [ -z "${BASH_VERSION}" -o "$BASH" != "/bin/bash" ]
 then
   >&2 echo "Script must be executed in BASH shell."
   exit 1

@@ -47,7 +47,7 @@ v_tmpfldr="$(mktemp -d -u -p ${TMPDIR}/.oci 2>&- || mktemp -d -u)"
 [[ "${DEBUG}" == "" ]] && DEBUG=0
 [ ! -z "${DEBUG##*[!0-9]*}" ] || DEBUG=0
 
-if [ -z "${BASH_VERSION}" ]
+if [ -z "${BASH_VERSION}" -o "$BASH" != "/bin/bash" ]
 then
   >&2 echo "Script must be executed in BASH shell."
   exit 1
