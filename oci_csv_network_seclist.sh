@@ -1,7 +1,7 @@
 #!/bin/sh
 #************************************************************************
 #
-#   csv-network-security-list.sh
+#   oci_csv_network_seclist.sh
 #
 #   Copyright 2018  Rodrigo Jorge <http://www.dbarj.com.br/>
 #
