@@ -50,7 +50,7 @@ v_jq="jq"
 [ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
 [ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
 
-if [ -z "${BASH_VERSION}" ]
+if [ -z "${BASH_VERSION}" -o "${BASH}" == "/bin/sh" ]
 then
   >&2 echo "Script must be executed in BASH shell."
   exit 1

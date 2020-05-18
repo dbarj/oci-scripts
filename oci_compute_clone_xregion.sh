@@ -55,7 +55,7 @@ v_os_bucketName=""
 v_sedrep_rule_target_name=""
 ####
 
-if [ -z "${BASH_VERSION}" -o "$BASH" != "/bin/bash" ]
+if [ -z "${BASH_VERSION}" -o "${BASH}" == "/bin/sh" ]
 then
   >&2 echo "Script must be executed in BASH shell."
   exit 1

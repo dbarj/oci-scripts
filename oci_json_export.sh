@@ -29,6 +29,12 @@ set -e
 v_oci="oci"
 v_jq="jq"
 
+if [ -z "${BASH_VERSION}" -o "${BASH}" == "/bin/sh" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
+
 # Add any desired oci argument exporting OCI_CLI_ARGS. Keep default to avoid oci_cli_rc usage.
 [ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
 [ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
@@ -46,12 +52,6 @@ v_tmpfldr="$(mktemp -d -u -p ${TMPDIR}/.oci 2>&- || mktemp -d -u)"
 # If DEBUG variable is undefined, change to 0.
 [[ "${DEBUG}" == "" ]] && DEBUG=0
 [ ! -z "${DEBUG##*[!0-9]*}" ] || DEBUG=0
-
-if [ -z "${BASH_VERSION}" -o "$BASH" != "/bin/bash" ]
-then
-  >&2 echo "Script must be executed in BASH shell."
-  exit 1
-fi
 
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 

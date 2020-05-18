@@ -52,7 +52,7 @@ printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
 # Export HIST_ZIP_FILE with the file name where will keep or read for historical info to avoid reprocessing.
 [[ "${HIST_ZIP_FILE}" == "" ]] && HIST_ZIP_FILE=""
 
-if [ -z "${BASH_VERSION}" -o "$BASH" != "/bin/bash" ]
+if [ -z "${BASH_VERSION}" -o "${BASH}" == "/bin/sh" ]
 then
   >&2 echo "Script must be executed in BASH shell."
   exit 1
