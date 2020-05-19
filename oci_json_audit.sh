@@ -21,13 +21,19 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.08
+# Version 1.09
 #************************************************************************
 set -eo pipefail
 
 # Define paths for oci-cli and jq or put them on $PATH. Don't use relative PATHs in the variables below.
 v_oci="oci"
 v_jq="jq"
+
+if [ -z "${BASH_VERSION}" -o "${BASH}" = "/bin/sh" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
 
 # Add any desired oci argument exporting OCI_CLI_ARGS. Keep default to avoid oci_cli_rc usage.
 [ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
@@ -47,7 +53,8 @@ v_def_period=3
 v_tmpfldr="$(mktemp -d -u -p ${TMPDIR}/.oci 2>&- || mktemp -d -u)"
 
 # Export DEBUG=1 to see the steps being executed.
-[[ "${DEBUG}" == "" ]] && DEBUG=0
+[[ "${DEBUG}" == "" ]] && DEBUG=1
+[ ! -z "${DEBUG##*[!0-9]*}" ] || DEBUG=1
 
 # If Shell is executed with "-x", all core functions will set this flag 
 printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
@@ -56,12 +63,6 @@ printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
 [[ "${HIST_ZIP_FILE}" == "" ]] && HIST_ZIP_FILE=""
 
 v_hist_folder="audit_history"
-
-if [ -z "${BASH_VERSION}" -o "${BASH}" == "/bin/sh" ]
-then
-  >&2 echo "Script must be executed in BASH shell."
-  exit 1
-fi
 
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
@@ -78,10 +79,11 @@ function exitError ()
 
 function echoDebug ()
 {
-   local v_filename="${v_this_script%.*}.log"
-   (( $DEBUG )) && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ${v_filename}
-   (( $DEBUG )) && [ -f "../${v_filename}" ] && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ../${v_filename}
-   return 0
+  local v_debug_lvl="$2"
+  local v_filename="${v_this_script%.*}.log"
+  [ -z "${v_debug_lvl}" ] && v_debug_lvl=1
+  [ $DEBUG -ge ${v_debug_lvl} ] && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ${v_filename}
+  return 0
 }
 
 function funcCheckValueInRange ()
@@ -139,6 +141,13 @@ then
   echoError "- ALL         - Execute json export for ALL possible options and compress output in a zip file."
   echoError "- ALL_REGIONS - Same as ALL, but run for all tenancy's subscribed regions."
   echoError "$(funcPrintRange "$v_opt_list")"
+  echoError ""
+  echoError "------------------------------------"
+  echoError ""
+  echoError "PS: it is possible to export the following variables to change oci-cli behaviour:"
+  echoError "- OCI_CLI_ARGS - All parameters provided will be appended to oci-cli call."
+  echoError "                 Eg: export OCI_CLI_ARGS='--profile ACME'"
+
   exit 1
 fi
 
@@ -249,8 +258,9 @@ fi
 
 if [ -z "${HIST_ZIP_FILE}" ]
 then
-  echoError "You haven't exported HIST_ZIP_FILE variable, meaning you won't keep a execution hist that can be reused on next script calls."
-  echoError "With zip history, next executions will be much faster. It's extremelly recommended to enable it."
+  echoError "You haven't exported HIST_ZIP_FILE variable, meaning you won't keep a execution history track that can be reused on next script calls."
+  echoError "With zip history, next executions will be differential and much faster. It's extremelly recommended to enable it."
+  echoError "Eg: export HIST_ZIP_FILE='./audit_hist.zip'"
   echoError "Press CTRL+C in next 10 seconds if you want to exit and fix this."
   sleep 10
 elif [ -d "${HIST_ZIP_FILE}.lock.d" -a -z "${HIST_IGNORE_LOCK}" ]
@@ -375,7 +385,7 @@ function jsonAudEvents ()
   [ $v_next_epoch_end -ge ${v_end_epoch} ] && v_next_epoch_end=${v_end_epoch}
   v_next_date_end=$(ConvEpochToYMDhms ${v_next_epoch_end})
 
-  v_jq_filter='{data:[.data[] | select(."request-action" != "GET")]}'
+  v_jq_filter='{data:[.data[] | select(.data.request.action != "GET")]}'
   # v_jq_filter='."opc-next-page" as $np | {data:[.data[] | select(."request-action" != "GET")] , "opc-next-page": $np}'
 
   v_oci_audqry="audit event list --all"
