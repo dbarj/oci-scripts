@@ -21,13 +21,19 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2019 by Rodrigo Jorge
-# Version 1.09
+# Version 1.10
 #************************************************************************
 set -eo pipefail
 
 # Define paths for oci-cli and jq or put them on $PATH. Don't use relative PATHs in the variables below.
 v_curl="curl"
 v_jq="jq"
+
+if [ -z "${BASH_VERSION}" -o "${BASH}" = "/bin/sh" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
 
 # Timeout for CURL calls
 v_curl_timeout=600 # Seconds
@@ -49,12 +55,6 @@ printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
 [[ "${HIST_ZIP_FILE}" == "" ]] && HIST_ZIP_FILE=""
 
 v_hist_folder="billing_history"
-
-if [ -z "${BASH_VERSION}" -o "${BASH}" == "/bin/sh" ]
-then
-  >&2 echo "Script must be executed in BASH shell."
-  exit 1
-fi
 
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
