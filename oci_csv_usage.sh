@@ -21,13 +21,19 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2020 by Rodrigo Jorge
-# Version 1.03
+# Version 1.04
 #************************************************************************
 set -eo pipefail
 
 # Define paths for oci-cli and jq or put them on $PATH. Don't use relative PATHs in the variables below.
 v_oci="oci"
 v_jq="jq"
+
+if [ -z "${BASH_VERSION}" -o "${BASH}" = "/bin/sh" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
 
 # Add any desired oci argument exporting OCI_CLI_ARGS. Keep default to avoid oci_cli_rc usage.
 [ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
@@ -51,12 +57,6 @@ printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
 
 # Export HIST_ZIP_FILE with the file name where will keep or read for historical info to avoid reprocessing.
 [[ "${HIST_ZIP_FILE}" == "" ]] && HIST_ZIP_FILE=""
-
-if [ -z "${BASH_VERSION}" -o "${BASH}" == "/bin/sh" ]
-then
-  >&2 echo "Script must be executed in BASH shell."
-  exit 1
-fi
 
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
@@ -537,7 +537,7 @@ main
 cleanHist
 echoDebug "END"
 
-[ -f "${v_this_script%.*}.log" -a -f "$v_outfile" ] && ${v_zip} -q "$v_outfile" "${v_this_script%.*}.log"
+[ -f "${v_this_script%.*}.log" -a -f "$v_outfile" ] && ${v_zip} -qm "$v_outfile" "${v_this_script%.*}.log"
 
 exit ${v_ret}
 ###
