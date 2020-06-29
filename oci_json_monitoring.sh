@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.03
+# Version 1.04
 #************************************************************************
 set -eo pipefail
 
@@ -29,26 +29,17 @@ set -eo pipefail
 v_oci="oci"
 v_jq="jq"
 
+if [ -z "${BASH_VERSION}" -o "${BASH}" = "/bin/sh" ]
+then
+  >&2 echo "Script must be executed in BASH shell."
+  exit 1
+fi
+
 # Add any desired oci argument exporting OCI_CLI_ARGS. Keep default to avoid oci_cli_rc usage.
 [ -n "${OCI_CLI_ARGS}" ] && v_oci_args="${OCI_CLI_ARGS}"
 [ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
 
 # DON'T REMOVE/CHANGE THOSE COMMENTS. THEY ARE USED TO DEFINE WHAT WILL BE EXTRACTED FROM MONIT
-
-# BEGIN METRICS
-# oci_computeagent,CpuUtilization
-# oci_computeagent,DiskBytesRead
-# oci_computeagent,DiskBytesWritten
-# oci_computeagent,DiskIopsRead
-# oci_computeagent,DiskIopsWritten
-# oci_computeagent,MemoryUtilization
-# oci_computeagent,NetworksBytesIn
-# oci_computeagent,NetworksBytesOut
-# oci_blockstore,VolumeReadOps
-# oci_blockstore,VolumeReadThroughput
-# oci_blockstore,VolumeWriteOps
-# oci_blockstore,VolumeWriteThroughput
-# END METRICS
 
 # Don't change it.
 v_min_ocicli="2.4.34"
@@ -64,7 +55,8 @@ v_def_period=3
 v_tmpfldr="$(mktemp -d -u -p ${TMPDIR}/.oci 2>&- || mktemp -d -u)"
 
 # Export DEBUG=1 to see the steps being executed.
-[[ "${DEBUG}" == "" ]] && DEBUG=0
+[[ "${DEBUG}" == "" ]] && DEBUG=1
+[ ! -z "${DEBUG##*[!0-9]*}" ] || DEBUG=1
 
 # If Shell is executed with "-x", all core functions will set this flag 
 printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
@@ -73,12 +65,6 @@ printf %s\\n "$-" | grep -q -F 'x' && v_dbgflag='-x' || v_dbgflag='+x'
 [[ "${HIST_ZIP_FILE}" == "" ]] && HIST_ZIP_FILE=""
 
 v_hist_folder="monitoring_history"
-
-if [ -z "${BASH_VERSION}" -o "$BASH" != "/bin/bash" ]
-then
-  >&2 echo "Script must be executed in BASH shell."
-  exit 1
-fi
 
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
 
@@ -95,10 +81,12 @@ function exitError ()
 
 function echoDebug ()
 {
-   local v_filename="${v_this_script%.*}.log"
-   (( $DEBUG )) && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ${v_filename}
-   (( $DEBUG )) && [ -f "../${v_filename}" ] && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ../${v_filename}
-   return 0
+  local v_debug_lvl="$2"
+  local v_filename="${v_this_script%.*}.log"
+  [ -z "${v_debug_lvl}" ] && v_debug_lvl=1
+  [ $DEBUG -ge ${v_debug_lvl} ] && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ${v_filename}
+  [ $DEBUG -ge ${v_debug_lvl} ] && [ -f "../${v_filename}" ] && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ../${v_filename}
+  return 0
 }
 
 function funcCheckValueInRange ()
@@ -149,13 +137,28 @@ then
   echoError "Usage: ${v_this_script} <option> [begin_time] [end_time]"
   echoError ""
   echoError "<option> - Execution Scope."
-  echoError "[begin_time] (Optional) - Defines start time when exporting Audit Info. (Default is $v_def_period days back) "
-  echoError "[end_time]   (Optional) - Defines end time when exporting Audit Info. (Default is today)"
+  echoError "[begin_time] (Optional) - Defines start time when exporting metric info. (Default is $v_def_period days back) "
+  echoError "[end_time]   (Optional) - Defines end time when exporting metric info. (Default is today)"
   echoError ""
   echoError "Valid <option> values are:"
   echoError "- ALL         - Execute json export for ALL possible options and compress output in a zip file."
   echoError "- ALL_REGIONS - Same as ALL, but run for all tenancy's subscribed regions."
   echoError "$(funcPrintRange "$v_opt_list")"
+  echoError ""
+  echoError "------------------------------------"
+  echoError ""
+  echoError "You must also export OCI_MONIT_METRIC with the namespace,metric you want to export."
+  echoError "Eg: export OCI_MONIT_METRIC='oci_computeagent,CpuUtilization"
+  echoError "oci_computeagent,DiskBytesRead"
+  echoError "oci_computeagent,DiskBytesWritten"
+  echoError "oci_computeagent,MemoryUtilization"
+  echoError "oci_blockstore,VolumeReadOps'"
+  echoError ""
+  echoError "------------------------------------"
+  echoError ""
+  echoError "PS: it is possible to export the following variables to change oci-cli behaviour:"
+  echoError "- OCI_CLI_ARGS - All parameters provided will be appended to oci-cli call."
+  echoError "                 Eg: export OCI_CLI_ARGS='--profile ACME'"
   exit 1
 fi
 
@@ -182,6 +185,20 @@ then
     exit 1
   fi
 fi
+
+if ! $(which ${v_oci} >&- 2>&-)
+then
+  echoError "Could not find oci-cli binary. Please adapt the path in the script if not in \$PATH."
+  echoError "Download page: https://github.com/oracle/oci-cli"
+  exit 1
+fi
+
+if [ -z "${OCI_MONIT_METRIC}" ]
+then
+  exitError "You haven't exported OCI_MONIT_METRIC variable."
+fi
+
+v_metric_list="${OCI_MONIT_METRIC}"
 
 v_zip="zip -9"
 
@@ -266,8 +283,9 @@ fi
 
 if [ -z "${HIST_ZIP_FILE}" ]
 then
-  echoError "You haven't exported HIST_ZIP_FILE variable, meaning you won't keep a execution hist that can be reused on next script calls."
-  echoError "With zip history, next executions will be much faster. It's extremelly recommended to enable it."
+  echoError "You haven't exported HIST_ZIP_FILE variable, meaning you won't keep a execution history track that can be reused on next script calls."
+  echoError "With zip history, next executions will be differential and much faster. It's extremelly recommended to enable it."
+  echoError "Eg: export HIST_ZIP_FILE='./monit_hist.zip'"
   echoError "Press CTRL+C in next 10 seconds if you want to exit and fix this."
   sleep 10
 elif [ -d "${HIST_ZIP_FILE}.lock.d" -a -z "${HIST_IGNORE_LOCK}" ]
@@ -502,8 +520,6 @@ function jsonMetricData ()
   return 0
 }
 
-v_metric_list=$(sed -e '1,/^# BEGIN METRICS/d' -e '/^# END METRICS/,$d' -e 's/^# *//' $0)
-
 function jsonAllMetricList ()
 {
   ##########
@@ -533,7 +549,7 @@ function jsonAllMetricList ()
     v_vl2=$(${v_jq} -r '.[1]' <<< "${v_item}")
     v_vl3=$(${v_jq} -r '.[2]' <<< "${v_item}")
 
-    grep -q "${v_vl2},${v_vl3}" <(echo "$v_metric_list") || continue
+    grep -q -Fx "${v_vl2},${v_vl3}" <(echo "$v_metric_list") || continue
 
     set +e
     v_out=$(jsonSimple "${v_arg1} --compartment-id ${v_vl1} --namespace ${v_vl2} --query-text '${v_vl3}[${v_arg3}].${v_arg4}'" "${v_arg2}")
