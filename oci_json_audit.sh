@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2019 by Rodrigo Jorge
-# Version 1.09
+# Version 1.10
 #************************************************************************
 set -eo pipefail
 
@@ -83,6 +83,7 @@ function echoDebug ()
   local v_filename="${v_this_script%.*}.log"
   [ -z "${v_debug_lvl}" ] && v_debug_lvl=1
   [ $DEBUG -ge ${v_debug_lvl} ] && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ${v_filename}
+  [ $DEBUG -ge ${v_debug_lvl} ] && [ -f "../${v_filename}" ] && echo "$(date '+%Y%m%d%H%M%S'): $1" >> ../${v_filename}
   return 0
 }
 
