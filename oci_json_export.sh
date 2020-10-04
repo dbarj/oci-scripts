@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 2.08
+# Version 2.10
 #************************************************************************
 set -eo pipefail
 
@@ -40,7 +40,7 @@ fi
 [ -z "${OCI_CLI_ARGS}" ] && v_oci_args="--cli-rc-file /dev/null"
 
 # Don't change it.
-v_min_ocicli="2.9.11"
+v_min_ocicli="2.12.3"
 
 # Timeout for OCI-CLI calls
 v_oci_timeout=600 # Seconds
@@ -67,7 +67,15 @@ v_tmpfldr="$(mktemp -d -u -p ${TMPDIR}/.oci 2>&- || mktemp -d -u)"
 #  9 = + Parallel Wait Loop
 # 10 = + Lock/Unlock Loop
 
-trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM
+trap "trap - SIGTERM && cleanAllonAbort && kill -- -$$" SIGINT SIGTERM
+
+function cleanAllonAbort ()
+{
+  if [ -n "${v_tmpfldr_root}" -a -d "${v_tmpfldr_root}" ]
+  then
+    rm -rf "${v_tmpfldr_root}" 2>&- || true
+  fi
+}
 
 function echoError ()
 {
@@ -249,14 +257,11 @@ function jsonCompartmentsAccessible ()
   # Will only return compartments which the connect user has any inspect privilege.
   set -e # Exit if error in any call.
   local v_fout v_tenancy_entry
-  v_fout=$(jsonSimple "iam compartment list --all --compartment-id-in-subtree true --access-level ACCESSIBLE")
+  v_fout=$(jsonSimple "iam compartment list --all --compartment-id-in-subtree true --access-level ACCESSIBLE --include-root")
   ## Remove DELETED compartments to avoid query errors
   if [ -n "$v_fout" ]
   then
     v_fout=$(${v_jq} '{data:[.data[] | select(."lifecycle-state" != "DELETED")]}' <<< "${v_fout}")
-    v_tenancy_entry=$(IAM-Comparts | ${v_jq} -rc '.data[] | select(."id" | startswith("ocid1.tenancy.oc1."))')
-    ## Add root:
-    v_fout=$(${v_jq} '.data += ['${v_tenancy_entry}']' <<< "$v_fout")
     echo "${v_fout}"
   fi
 }
@@ -266,25 +271,11 @@ function jsonCompartments ()
   # Will return all compartments in the tenancy.
   set -e # Exit if error in any call.
   local v_fout v_tenancy_id
-  v_fout=$(jsonSimple "iam compartment list --all --compartment-id-in-subtree true --access-level ANY")
+  v_fout=$(jsonSimple "iam compartment list --all --compartment-id-in-subtree true --access-level ANY --include-root")
   ## Remove DELETED compartments to avoid query errors
   if [ -n "$v_fout" ]
   then
     v_fout=$(${v_jq} '{data:[.data[] | select(."lifecycle-state" != "DELETED")]}' <<< "${v_fout}")
-    v_tenancy_id=$(${v_jq} -r '[.data[]."compartment-id"] | unique | .[] | select(startswith("ocid1.tenancy.oc1."))' <<< "${v_fout}")
-    ## Add root:
-    v_fout=$(${v_jq} '.data += [{
-                                 "compartment-id": "'${v_tenancy_id}'",
-                                 "defined-tags": {},
-                                 "description": null,
-                                 "freeform-tags": {},
-                                 "id": "'${v_tenancy_id}'",
-                                 "inactive-status": null,
-                                 "is-accessible": null,
-                                 "lifecycle-state": "ACTIVE",
-                                 "name": "ROOT",
-                                 "time-created": null
-                                }]' <<< "$v_fout")
     echo "${v_fout}"
   fi
 }
