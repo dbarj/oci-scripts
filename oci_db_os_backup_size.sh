@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Oct/2020 by Rodrigo Jorge
-# Version 1.01
+# Version 1.02
 #************************************************************************
 set -eo pipefail
 
@@ -70,18 +70,18 @@ v_opc_file="$1"
 
 if [ "${v_opc_file}" = "-h" -o  "${v_opc_file}" = "--help" ]
 then
-  echoError "Usage: ${v_this_script} <v_opc_file>"
+  echoError "Usage: ${v_this_script} <OPC_CONFIG_FILE>"
   echoError ""
   echoError "This script will return the total space used by your database in the object storage."
   echoError ""
-  echoError "<v_opc_file> - opc configuration file. Empty = auto-detect."
+  echoError "<OPC_CONFIG_FILE> - opc configuration file. Empty = auto-detect."
   exit 1
 fi
 
 
 if ! $(which curl >&- 2>&-)
 then
-  exitError "Could not find cuel binary. Please adapt the path in the script if not in \$PATH."
+  exitError "Could not find curl binary. Please adapt the path in the script if not in \$PATH."
 fi
 
 function getOPCfromDB ()
@@ -89,7 +89,7 @@ function getOPCfromDB ()
     set -eo pipefail
     sqlplus -L -S / as sysdba <<'EOF'
 set lines 1000 pages 0 hea off feed off
-select replace(replace(regexp_substr(value,'OPC_PFILE=.*\)'),'OPC_PFILE=',''),')','') value from v$rman_configuration where name='CHANNEL';
+select distinct replace(replace(regexp_substr(value,'OPC_PFILE=.*\)'),'OPC_PFILE=',''),')','') value from v$rman_configuration where name='CHANNEL';
 EOF
 }
 
