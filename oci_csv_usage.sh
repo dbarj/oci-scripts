@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2020 by Rodrigo Jorge
-# Version 1.04
+# Version 1.05
 #************************************************************************
 set -eo pipefail
 
@@ -285,8 +285,10 @@ function csvUsageReport ()
     return $v_ret
   fi
 
+  OIFS="$IFS"; IFS=$'\n'
   for v_item in $l_itens
   do
+    IFS="$OIFS"
     c_name=$(cut -d ',' -f 1 <<< "$v_item" | sed 's/^.//; s/.$//')
     c_fdate=$(cut -d ',' -f 2 <<< "$v_item" | sed 's/^.//; s/.$//')
     c_fdate_YMD=${c_fdate:0:10}
@@ -294,28 +296,28 @@ function csvUsageReport ()
     c_fdate_epoch=$(ConvYMDToEpoch ${c_fdate_YMD} ${c_fdate_hms})
     if [ $c_fdate_epoch -lt $v_start_epoch -o $c_fdate_epoch -gt $v_end_epoch ]
     then
-      echoDebug "${c_name} date is ${c_fdate} - Outside requested scope." 2
+      echoDebug "'${c_name}' date is ${c_fdate} - Outside requested scope." 2
       continue
     fi
     c_file=$(sed 's/\//_/g' <<< "${c_name}")
     if ${v_execute}
     then
-      echo "- Getting ${c_name} created on ${c_fdate}."
+      echo "- Getting '${c_name}' created on ${c_fdate}."
       v_search="${c_file}_${c_fdate}"
       # Will first try to get the output from the historical zip. If can't find it, will call the get function.
       getFileFromZip "${v_search}" "${c_file}" && v_ret=$? || v_ret=$?
       if [ $v_ret -ne 0 ]
       then
         # Run
-        v_oci_usagereport="os object get --namespace bling --bucket-name ${v_tenancy_id} --name $c_name --file ${c_file}"
+        v_oci_usagereport="os object get --namespace bling --bucket-name ${v_tenancy_id} --name '$c_name' --file '${c_file}'"
         v_out=$(jsonSimple "${v_oci_usagereport}" ".")
         (putFileOnZip "${v_search}" "${c_file}") || true
       else
-        echoDebug "Got \"${c_file}\" from Zip Hist."
+        echoDebug "Got '${c_file}' from Zip Hist."
       fi
       ${v_zip} -qm "$v_outfile" "${c_file}"
     else
-      echo "${v_oci} os object get --namespace bling --bucket-name ${v_tenancy_id} --name $c_name --file ${c_file}"
+      echo "${v_oci} os object get --namespace bling --bucket-name ${v_tenancy_id} --name '$c_name' --file '${c_file}'"
     fi
   done
 
@@ -387,7 +389,13 @@ function runOCI ()
   else
     return $b_ret
   fi
-  ${v_jq} -e . >/dev/null 2>&1 <<< "${v_out}" && v_ret=$? || v_ret=$?
+  # JQ <= 1.6 returns 0 on empty strings. JQ > 1.6 returns 4.
+  if [ -n "${v_out}" ]
+  then
+    ${v_jq} -e . >/dev/null 2>&1 <<< "${v_out}" && v_ret=$? || v_ret=$?
+  else
+    v_ret=0
+  fi
   echo "${v_out}"
   return ${v_ret}
 }
@@ -512,7 +520,7 @@ function putFileOnZip ()
   else
     [ $(wc -l <<< "${v_line}") -gt 1 ] && return 1
   fi
-  echoDebug "Adding ${v_file} to ${HIST_ZIP_FILE}." 2
+  echoDebug "Adding '${v_file}' to ${HIST_ZIP_FILE}." 2
   ${v_zip} -qj ${HIST_ZIP_FILE} "${v_list}"
   ${v_zip} -qj ${HIST_ZIP_FILE} "${v_file}"
   return 0

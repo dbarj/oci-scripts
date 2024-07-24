@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: May/2019 by Rodrigo Jorge
-# Version 1.10
+# Version 1.11
 #************************************************************************
 set -eo pipefail
 
@@ -404,7 +404,13 @@ function runCurl ()
   else
     echoDebug "Got \"${v_arg1}\" from Zip Hist."      
   fi
-  ${v_jq} -e . >/dev/null 2>&1 <<< "${v_out}" && v_ret=$? || v_ret=$?
+  # JQ <= 1.6 returns 0 on empty strings. JQ > 1.6 returns 4.
+  if [ -n "${v_out}" ]
+  then
+    ${v_jq} -e . >/dev/null 2>&1 <<< "${v_out}" && v_ret=$? || v_ret=$?
+  else
+    v_ret=0
+  fi
   echo "${v_out}"
   return ${v_ret}
 }
