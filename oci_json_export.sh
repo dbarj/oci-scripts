@@ -21,7 +21,7 @@
 #************************************************************************
 # Available at: https://github.com/dbarj/oci-scripts
 # Created on: Aug/2018 by Rodrigo Jorge
-# Version 2.11
+# Version 2.12
 #************************************************************************
 set -eo pipefail
 
@@ -693,7 +693,7 @@ function oci_parallel_wait ()
   while :
   do
     create_lock_or_wait parallel_file "${v_tmpfldr_root}"
-    read v_parallel_count 2>&- < "${v_parallel_file}" || v_parallel_count=0
+    [ -f "${v_parallel_file}" ] && read v_parallel_count 2>&- < "${v_parallel_file}" || v_parallel_count=0
     if [ $v_parallel_count -lt $v_oci_parallel ]
     then
       v_parallel_count=$((v_parallel_count+1))
